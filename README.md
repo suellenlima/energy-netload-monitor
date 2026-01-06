@@ -10,6 +10,8 @@ Login: admin@energy.com / Senha: admin.
 
 Execute
 
+docker-compose exec db psql -U admin -d energy_monitor
+
 docker-compose exec etl python src/extractors/aneel_client.py
 docker-compose exec etl python src/extractors/ons_client.py
 docker-compose exec etl python src/extractors/gd_client.py
