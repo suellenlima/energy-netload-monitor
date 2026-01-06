@@ -18,7 +18,12 @@ Execute
 5. docker-compose exec etl python src/extractors/inpe_weather_client.py
 
 
+Execute
 
+03_treino_modelo_telhados  NOTEBOOK
+
+
+===================================================
 
 energy-netload-monitor/
 ├── .github/                 # CI/CD (GitHub Actions para deploy/testes)

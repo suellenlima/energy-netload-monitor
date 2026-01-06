@@ -81,7 +81,15 @@ if st.sidebar.button("Atualizar Dashboard", type="primary"):
             params_carga["distribuidora"] = distribuidora_filtro
 
         resp_carga = requests.get(f"{API_URL}/analise/carga-oculta", params=params_carga)
-        df_carga = pd.DataFrame(resp_carga.json()) if resp_carga.status_code == 200 else pd.DataFrame()
+        if resp_carga.status_code == 200:
+            df_carga = pd.DataFrame(resp_carga.json())
+            
+            # --- CORREÇÃO AQUI: Converter texto para Data ---
+            if not df_carga.empty and 'hora' in df_carga.columns:
+                df_carga['hora'] = pd.to_datetime(df_carga['hora'])
+        else:
+            df_carga = pd.DataFrame()
+            
     except Exception as e:
         st.error(f"Erro ao buscar dados de carga: {e}")
         df_carga = pd.DataFrame()
@@ -94,19 +102,34 @@ if st.sidebar.button("Atualizar Dashboard", type="primary"):
     st.header(f"📉 Curva de Carga Líquida ({subsistema})")
     
     if not df_carga.empty:
-        col1, col2, col3 = st.columns(3)
+        # --- ALTERAÇÃO AQUI: Mudamos para 4 colunas ---
+        col1, col2, col3, col4 = st.columns(4)
+        
+        # Cálculos
         carga_atual = df_carga.iloc[-1]['carga_ons']
         oculta_oficial = df_carga.iloc[-1]['estimativa_solar_mw']
         
-        col1.metric("Carga Rede (ONS)", f"{carga_atual:,.0f} MW")
-        col2.metric("Oculta Oficial (ANEEL)", f"{oculta_oficial:,.0f} MW")
+        # Pegamos o PICO do dia para mostrar o potencial solar
+        pico_solar_dia = df_carga['estimativa_solar_mw'].max()
+        hora_pico = df_carga.loc[df_carga['estimativa_solar_mw'].idxmax(), 'hora'].strftime('%Hh')
         
+        # Coluna 1: Carga Rede
+        col1.metric("Carga Rede (ONS)", f"{carga_atual:,.0f} MW")
+        
+        # Coluna 2: Carga Oculta ANEEL (Agora)
+        col2.metric("GD Distribuída (Agora)", f"{oculta_oficial:,.0f} MW", delta="Oficial")
+        
+        # Coluna 3: Oculta Auditada (Com a Fraude)
         if impacto_projecao_mw > 0:
-             col3.metric("Oculta Auditada (IA)", f"{oculta_oficial + impacto_projecao_mw:,.0f} MW", delta="RISCO")
+             col3.metric("Carga Auditada (IA)", f"{oculta_oficial + impacto_projecao_mw:,.0f} MW", delta="RISCO", delta_color="inverse")
         else:
-             col3.metric("Oculta Auditada", "Sem desvios")
+             col3.metric("Carga Auditada", "Sem desvios")
 
-        # Plotly Line Chart
+        # Coluna 4: INDICADOR SOLAR (Novo!) ☀️
+        # Mostra o máximo que a energia solar vai atingir hoje
+        col4.metric(f"Pico Solar (às {hora_pico})", f"{pico_solar_dia:,.0f} MW", delta="Atividade Solar")
+
+        # Plotly
         fig = go.Figure()
         
         # Linha Azul (ONS)
