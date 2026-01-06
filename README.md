@@ -27,6 +27,7 @@ Execute
 Execute
 
 03_treino_modelo_telhados  NOTEBOOK
+senha: admin
 
 
 ===================================================
