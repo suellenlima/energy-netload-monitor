@@ -11,7 +11,7 @@ Login: admin@energy.com / Senha: admin.
 Execute
 
 docker-compose exec etl python src/extractors/aneel_client.py
-docker-compose exec etl python src/extractors/ond_client.py
+docker-compose exec etl python src/extractors/ons_client.py
 docker-compose exec etl python src/extractors/gd_client.py
 docker-compose exec etl python src/extractors/inpe_weather_client.py
 
