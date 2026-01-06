@@ -1,0 +1,134 @@
+version: '3.8'
+
+services:
+  # -------------------------------------------------------------------------
+  # CAMADA DE DADOS: PostgreSQL + PostGIS + TimescaleDB
+  # Imagem oficial que já contém as duas extensões instaladas.
+  # -------------------------------------------------------------------------
+  db:
+    image: timescale/timescaledb-ha:pg15
+    container_name: energy_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-admin}
+      POSTGRES_PASSWORD: ${DB_PASS:-admin123}
+      POSTGRES_DB: ${DB_NAME:-energy_monitor}
+    ports:
+      - "5432:5432"
+    volumes:
+      # Persistência dos dados (para não perder quando desligar o container)
+      - postgres_data:/var/lib/postgresql/data
+      # Script de inicialização (Cria as extensões automaticamente)
+      - ./infrastructure/database/init_db.sh:/docker-entrypoint-initdb.d/init_db.sh
+    networks:
+      - energy_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-admin} -d ${DB_NAME:-energy_monitor}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # ADMINISTRAÇÃO: PgAdmin 4 (Interface visual para o Banco)
+  # Acessível em http://localhost:5050
+  # -------------------------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: energy_pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_MAIL:-admin@energy.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASS:-admin}
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+    networks:
+      - energy_net
+
+  # -------------------------------------------------------------------------
+  # BACKEND: API FastAPI
+  # Acessível em http://localhost:8000
+  # -------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: energy_api
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend:/app # Hot-reload: altera código local, reflete no container
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-admin}:${DB_PASS:-admin123}@db:5432/${DB_NAME:-energy_monitor}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - energy_net
+
+# -------------------------------------------------------------------------
+  # FRONTEND: Dashboard Streamlit
+  # Acessível em http://localhost:8501
+  # -------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: energy_frontend
+    # Comando para rodar o Streamlit
+    command: streamlit run src/app.py --server.port 8501 --server.address 0.0.0.0
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "8501:8501"
+    networks:
+      - energy_net
+      
+  # -------------------------------------------------------------------------
+  # ETL PIPELINE: Scripts de Engenharia de Dados
+  # Roda scripts em background ou agendados
+  # -------------------------------------------------------------------------
+  etl:
+    build:
+      context: ./etl_pipeline
+      dockerfile: Dockerfile
+    container_name: energy_etl
+    # Comando "infinito" para manter o container vivo esperando ordens
+    command: tail -f /dev/null 
+    volumes:
+      - ./etl_pipeline:/app
+      - ./data:/app/data # Acesso à pasta local de dados
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-admin}:${DB_PASS:-admin123}@db:5432/${DB_NAME:-energy_monitor}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - energy_net
+
+# -------------------------------------------------------------------------
+  # AI LAB: Jupyter Notebook para Visão Computacional
+  # Acessível em http://localhost:8888
+  # -------------------------------------------------------------------------
+  notebooks:
+    image: jupyter/scipy-notebook:latest
+    container_name: energy_ai_lab
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/home/jovyan/work
+      - ./data:/home/jovyan/data
+    environment:
+      - JUPYTER_TOKEN=admin  # Senha para acessar
+    networks:
+      - energy_net
+      
+# Definição dos Volumes e Redes
+volumes:
+  postgres_data:
+
+networks:
+  energy_net:
+    driver: bridge
