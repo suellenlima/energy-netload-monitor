@@ -1,21 +1,21 @@
 Run Docker
 
-docker-compose up --build
+1. docker-compose up --build
 
 
-Abra http://localhost:5050.
+2. Abra http://localhost:5050.
 
 Login: admin@energy.com / Senha: admin.
 
 
 Execute
 
-docker-compose exec db psql -U admin -d energy_monitor
+1. docker-compose exec db psql -U admin -d energy_monitor -c "CREATE EXTENSION IF NOT EXISTS postgis;"
 
-docker-compose exec etl python src/extractors/aneel_client.py
-docker-compose exec etl python src/extractors/ons_client.py
-docker-compose exec etl python src/extractors/gd_client.py
-docker-compose exec etl python src/extractors/inpe_weather_client.py
+2. docker-compose exec etl python src/extractors/aneel_client.py
+3. docker-compose exec etl python src/extractors/ons_client.py
+4. docker-compose exec etl python src/extractors/gd_client.py
+5. docker-compose exec etl python src/extractors/inpe_weather_client.py
 
 
 
@@ -67,7 +67,6 @@ energy-netload-monitor/
 │
 └── 📂 frontend/             # Interface do Usuário (React/Streamlit)
     ├── Dockerfile
-    ├── package.json
     ├── public/
     └── src/
         ├── 📂 components/   # Mapa, Gráficos, Botões
