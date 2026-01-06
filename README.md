@@ -7,6 +7,12 @@ Run Docker
 
 Login: admin@energy.com / Senha: admin.
 
+Create a new server:
+server name: Energy Monitor
+host: db
+database: energy_monitor
+password: admin123
+
 
 Execute
 
@@ -16,7 +22,7 @@ Execute
 3. docker-compose exec etl python src/extractors/ons_client.py
 4. docker-compose exec etl python src/extractors/gd_client.py
 5. docker-compose exec etl python src/extractors/inpe_weather_client.py
-
+6. docker-compose exec etl python src/fix_data.py
 
 Execute
 
