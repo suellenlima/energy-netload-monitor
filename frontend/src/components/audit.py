@@ -14,7 +14,7 @@ def _to_float(value: Any) -> float:
 
 def render_auditoria(dados_ia: Optional[Dict[str, Any]], impacto_projecao_mw: float, multiplicador: int) -> None:
     st.markdown("---")
-    st.header("Relat?rio de Auditoria de Integridade")
+    st.header("Relatório de Auditoria de Integridade")
 
     if not dados_ia or dados_ia.get("status") != "ALERTA":
         st.info("Selecione uma Distribuidora na barra lateral para iniciar a auditoria.")
@@ -24,7 +24,7 @@ def render_auditoria(dados_ia: Optional[Dict[str, Any]], impacto_projecao_mw: fl
         c1, c2 = st.columns([1.5, 1])
 
         with c1:
-            st.subheader("Evid?ncia Detectada (Sat?lite)")
+            st.subheader("Evidência Detectada (Satélite)")
             kpi1, kpi2 = st.columns(2)
             kpi3, kpi4 = st.columns(2)
 
@@ -34,18 +34,18 @@ def render_auditoria(dados_ia: Optional[Dict[str, Any]], impacto_projecao_mw: fl
             classe_ia = str(dados_ia.get("classe_ia", "N/A"))
             classe_icone = "IND" if "Industrial" in classe_ia or "Comercial" in classe_ia else "RES"
 
-            kpi1.metric("Classifica??o (IA)", f"{classe_icone} {classe_ia}")
+            kpi1.metric("Classificação (IA)", f"{classe_icone} {classe_ia}")
             if data_inspecao:
                 kpi2.metric("Data da Varredura", pd.to_datetime(data_inspecao).strftime("%d/%m/%Y"))
             else:
                 kpi2.metric("Data da Varredura", "N/A")
-            kpi3.metric("?rea Estimada", f"{area_m2:.0f} m2")
-            kpi4.metric("Pot?ncia Oculta", f"{fraude_kw:.2f} kW", delta="Desvio", delta_color="inverse")
+            kpi3.metric("Área Estimada", f"{area_m2:.0f} m2")
+            kpi4.metric("Potência Oculta", f"{fraude_kw:.2f} kW", delta="Desvio", delta_color="inverse")
 
-            st.info("O algoritmo identificou padr?es visuais incompat?veis na coordenada analisada.")
+            st.info("O algoritmo identificou padrões visuais incompatíveis na coordenada analisada.")
 
         with c2:
-            st.subheader("N?vel de Risco Projetado")
+            st.subheader("Nível de Risco Projetado")
             max_risco_mw = 500
             fig_gauge = go.Figure(
                 go.Indicator(

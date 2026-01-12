@@ -34,10 +34,10 @@ def render_carga_section(
     multiplicador: int,
     subsistema: str,
 ) -> None:
-    st.header(f"Curva de Carga L?quida ({subsistema})")
+    st.header(f"Curva de Carga Líquida ({subsistema})")
 
     if df_carga.empty:
-        st.info("Sem dados de carga para o per?odo selecionado.")
+        st.info("Sem dados de carga para o período selecionado.")
         return
 
     if impacto_projecao_mw > 0:
@@ -51,7 +51,7 @@ def render_carga_section(
     hora_pico = df_carga.loc[df_carga["estimativa_solar_mw"].idxmax(), "hora"].strftime("%Hh")
 
     col1.metric("Carga Rede (ONS)", f"{carga_atual:,.0f} MW")
-    col2.metric("GD Distribu?da (Agora)", f"{oculta_oficial:,.0f} MW", delta="Oficial")
+    col2.metric("GD Distribuída (Agora)", f"{oculta_oficial:,.0f} MW", delta="Oficial")
 
     if impacto_projecao_mw > 0:
         col3.metric(
@@ -63,7 +63,7 @@ def render_carga_section(
     else:
         col3.metric("Carga Auditada", "Sem desvios")
 
-    col4.metric(f"Pico Solar (?s {hora_pico})", f"{pico_solar_dia:,.0f} MW", delta="Atividade Solar")
+    col4.metric(f"Pico Solar (às {hora_pico})", f"{pico_solar_dia:,.0f} MW", delta="Atividade Solar")
 
     fig = go.Figure()
     fig.add_trace(
@@ -92,7 +92,7 @@ def render_carga_section(
                 x=df_carga["hora"],
                 y=df_carga["carga_auditada"],
                 mode="lines",
-                name=f"Cen?rio Projetado ({multiplicador}x)",
+                name=f"Cenário Projetado ({multiplicador}x)",
                 line=dict(color="#FF0000", width=2, dash="dashdot"),
             )
         )
@@ -125,7 +125,7 @@ def render_classes_consumo(client: ApiClient, distribuidora: str) -> None:
         return
 
     st.markdown("---")
-    st.header("Detalhamento da Concess?o")
+    st.header("Detalhamento da Concessão")
     c1, c2 = st.columns([1, 2])
     with c1:
         st.dataframe(df_classes, use_container_width=True, hide_index=True)

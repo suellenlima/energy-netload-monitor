@@ -35,6 +35,6 @@ class ApiClient:
         try:
             data = resp.json()
         except ValueError:
-            return ApiResult(data=None, error="Resposta inv?lida do backend.", status_code=resp.status_code)
+            return ApiResult(data=None, error="Resposta inválida do backend.", status_code=resp.status_code)
 
         return ApiResult(data=data, error=None, status_code=resp.status_code)

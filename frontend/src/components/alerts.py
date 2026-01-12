@@ -40,16 +40,16 @@ def render_alerta(dados_ia: Optional[Dict[str, Any]], multiplicador: int) -> Tup
 
         with st.container():
             distribuidora = dados_ia.get("distribuidora", "DESCONHECIDA")
-            st.error(f"ALERTA: FRAUDE DETECTADA NA CONCESS?O {distribuidora}")
+            st.error(f"ALERTA: FRAUDE DETECTADA NA CONCESSÃO {distribuidora}")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Detec??o Unit?ria (IA)", f"{fraude_kw:.2f} kW")
+            c1.metric("Detecção Unitária (IA)", f"{fraude_kw:.2f} kW")
             c2.metric(
-                f"Proje??o ({multiplicador}x)",
+                f"Projeção ({multiplicador}x)",
                 f"{impacto_projecao_mw:.2f} MW",
                 delta="Carga Fantasma",
             )
-            c3.metric("Pot?ncia Oficial", f"{oficial_kw:.2f} kW")
-            c4.metric("A??o", "Despacho T?rmico", delta="Urgente", delta_color="inverse")
+            c3.metric("Potência Oficial", f"{oficial_kw:.2f} kW")
+            c4.metric("Ação", "Despacho Térmico", delta="Urgente", delta_color="inverse")
             st.divider()
 
     return fraude_mw, impacto_projecao_mw

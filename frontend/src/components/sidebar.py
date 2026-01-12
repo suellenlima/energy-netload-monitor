@@ -26,21 +26,21 @@ def _load_distribuidoras(client: ApiClient) -> List[str]:
 
 
 def render_sidebar(client: ApiClient) -> SidebarState:
-    st.sidebar.header("Configura??es")
+    st.sidebar.header("Configurações")
 
     subsistema = st.sidebar.selectbox(
         "Subsistema (ONS)",
         ["SUDESTE", "SUL", "NORDESTE", "NORTE"],
     )
 
-    st.sidebar.subheader("An?lise por Distribuidora")
+    st.sidebar.subheader("Análise por Distribuidora")
     opcoes_distribuidoras = _load_distribuidoras(client)
-    distribuidora = st.sidebar.selectbox("Concess?o (GD):", opcoes_distribuidoras)
+    distribuidora = st.sidebar.selectbox("Concessão (GD):", opcoes_distribuidoras)
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("Cruzamento com IA")
-    multiplicador = st.sidebar.slider("Proje??o de Fraudes (Quantidade de casos)", 1, 5000, 1)
-    st.sidebar.info("Arraste para simular o impacto de m?ltiplas fraudes na rede.")
+    multiplicador = st.sidebar.slider("Projeção de Fraudes (Quantidade de casos)", 1, 5000, 1)
+    st.sidebar.info("Arraste para simular o impacto de múltiplas fraudes na rede.")
 
     refresh = st.sidebar.button("Atualizar Dashboard", type="primary")
 
