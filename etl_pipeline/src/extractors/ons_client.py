@@ -1,118 +1,159 @@
-import pandas as pd
-from sqlalchemy import create_engine, text
-import os
-import requests
 import io
+import logging
+import sys
 from datetime import datetime
+from pathlib import Path
+from typing import Iterable, Optional
 
-# Configurações
+import pandas as pd
+
+SRC_DIR = Path(__file__).resolve().parents[1]
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from core import create_db_engine, create_session, delete_time_window, load_settings, request
+
 CKAN_API_URL = "https://dados.ons.org.br/api/3/action/package_show?id=carga-energia"
-DB_URL = os.getenv("DATABASE_URL")
 
-def get_dynamic_url():
-    """Consulta API do ONS para achar a URL do CSV mais recente"""
-    print("🔎 Consultando API do ONS...")
-    try:
-        response = requests.get(CKAN_API_URL, timeout=20)
-        data = response.json()
-        resources = data['result']['resources']
-        ano_atual = str(datetime.now().year)
-        ano_anterior = str(datetime.now().year - 1)
-        
-        # Tenta pegar 2026, se não tiver, pega 2025
-        for res in resources:
-            if ano_atual in res['name'] and res['format'].upper() == 'CSV':
-                return res['url']
-        for res in resources:
-            if ano_anterior in res['name'] and res['format'].upper() == 'CSV':
-                return res['url']
-        return None
-    except Exception as e:
-        print(f"⚠️ Erro na API: {e}")
-        return None
 
-def encontrar_coluna_carga(df):
-    """
-    Procura a coluna de carga de forma inteligente, 
-    sem depender do nome exato que muda toda hora.
-    """
-    colunas = df.columns
-    # 1. Tenta nomes conhecidos exatos
-    candidatos = [
-        'val_cargaenergiamw', 'val_cargaenergiamediamw', 
-        'val_cargaeneergiamwmed', 'val_cargaenergiammwmed', 'val_cargaenergiamwmed'
+def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [c.strip().lower() for c in df.columns]
+    return df
+
+
+def find_carga_column(columns: Iterable[str]) -> Optional[str]:
+    candidates = [
+        "val_cargaenergiamw",
+        "val_cargaenergiamediamw",
+        "val_cargaeneergiamwmed",
+        "val_cargaenergiammwmed",
+        "val_cargaenergiamwmed",
     ]
-    for c in candidatos:
-        if c in colunas:
-            return c
-            
-    # 2. Se falhar, procura qualquer coluna que comece com 'val_carga' e termine com 'mw' ou 'med'
-    for col in colunas:
-        if col.startswith('val_carga'):
-            print(f"🧐 Coluna de carga detectada dinamicamente: {col}")
+    for name in candidates:
+        if name in columns:
+            return name
+
+    for col in columns:
+        if col.startswith("val_carga"):
             return col
-            
+
     return None
 
-def run_extraction():
-    print("⚡ Iniciando extração ONS (Versão Blindada)...")
-    
-    if not DB_URL:
-        raise ValueError("DATABASE_URL não configurada.")
-    engine = create_engine(DB_URL)
 
-    target_url = get_dynamic_url()
-    if not target_url:
-        print("❌ Nenhum link encontrado.")
-        return
-
+def get_dynamic_url(session, settings, logger: logging.Logger) -> Optional[str]:
+    logger.info("Consultando API CKAN do ONS.")
     try:
-        print(f"⬇️ Baixando: {target_url}")
-        response = requests.get(target_url, timeout=60)
-        
-        df = pd.read_csv(io.BytesIO(response.content), sep=';', decimal=',')
-        
-        # Padroniza nomes básicos
-        df = df.rename(columns={
-            'din_instante': 'time', 'nom_subsistema': 'subsistema',
-            'subsistema': 'subsistema', 'time': 'time'
-        })
-        
-        # --- AQUI ESTA A MAGIA ---
-        col_carga_original = encontrar_coluna_carga(df)
-        
-        if not col_carga_original:
-            print(f"⚠️ IMPOSSÍVEL achar a coluna de carga. Colunas no arquivo: {list(df.columns)}")
-            return
+        response = request(session, "GET", CKAN_API_URL, settings=settings.http, logger=logger)
+        response.raise_for_status()
+        data = response.json()
+        resources = data["result"]["resources"]
+        current_year = str(datetime.now().year)
+        previous_year = str(datetime.now().year - 1)
 
-        # Renomeia a coluna encontrada para o padrão 'carga_mw'
-        df = df.rename(columns={col_carga_original: 'carga_mw'})
+        for res in resources:
+            name = res.get("name", "")
+            if current_year in name and res.get("format", "").upper() == "CSV":
+                return res.get("url")
+        for res in resources:
+            name = res.get("name", "")
+            if previous_year in name and res.get("format", "").upper() == "CSV":
+                return res.get("url")
+        return None
+    except Exception as exc:
+        logger.warning("Erro na API do ONS: %s", exc)
+        return None
 
-        # Limpeza final
-        df['time'] = pd.to_datetime(df['time'])
-        df['carga_mw'] = pd.to_numeric(df['carga_mw'], errors='coerce')
-        df_final = df[['time', 'subsistema', 'carga_mw']].dropna()
-        df_final = df_final.drop_duplicates(subset=['time', 'subsistema'])
 
-        if not df_final.empty:
-            min_time = df_final['time'].min()
-            max_time = df_final['time'].max()
-            subsistemas = df_final['subsistema'].dropna().unique().tolist()
-            if subsistemas:
-                delete_query = text("""
-                    DELETE FROM carga_ons
-                    WHERE time >= :start AND time <= :end
-                    AND subsistema = ANY(:subs)
-                """)
-                with engine.begin() as conn:
-                    conn.execute(delete_query, {"start": min_time, "end": max_time, "subs": subsistemas})
+def transform_carga_ons_csv(content: bytes, logger: logging.Logger) -> pd.DataFrame:
+    df = pd.read_csv(io.BytesIO(content), sep=";", decimal=",")
+    df = _normalize_columns(df)
+    df = df.rename(
+        columns={
+            "din_instante": "time",
+            "nom_subsistema": "subsistema",
+            "subsistema": "subsistema",
+            "time": "time",
+        }
+    )
 
-        print(f"💾 Inserindo {len(df_final)} registros no Banco...")
-        df_final.to_sql('carga_ons', engine, if_exists='append', index=False, method='multi', chunksize=10000)
-        print("✅ Sucesso! Dados do ONS importados.")
+    carga_col = find_carga_column(df.columns)
+    if not carga_col:
+        logger.warning("Coluna de carga nao encontrada. Colunas: %s", list(df.columns))
+        return pd.DataFrame(columns=["time", "subsistema", "carga_mw"])
 
-    except Exception as e:
-        print(f"❌ Erro: {e}")
+    df = df.rename(columns={carga_col: "carga_mw"})
+    df["time"] = pd.to_datetime(df["time"])
+    df["carga_mw"] = pd.to_numeric(df["carga_mw"], errors="coerce")
+
+    df_final = df[["time", "subsistema", "carga_mw"]].dropna()
+    return df_final.drop_duplicates(subset=["time", "subsistema"])
+
+
+def load_carga_ons(df: pd.DataFrame, engine, logger: logging.Logger) -> int:
+    if df.empty:
+        logger.info("Sem linhas para carregar.")
+        return 0
+
+    min_time = df["time"].min()
+    max_time = df["time"].max()
+    subsistemas = df["subsistema"].dropna().unique().tolist()
+
+    if subsistemas:
+        delete_time_window(
+            engine,
+            "carga_ons",
+            "time",
+            min_time,
+            max_time,
+            filters={"subsistema": subsistemas},
+        )
+
+    df.to_sql(
+        "carga_ons",
+        engine,
+        if_exists="append",
+        index=False,
+        method="multi",
+        chunksize=10000,
+    )
+    logger.info("Carregadas %s linhas em carga_ons.", len(df))
+    return int(len(df))
+
+
+def run_extraction(session=None, engine=None, settings=None, logger=None) -> int:
+    logger = logger or logging.getLogger("etl.ons")
+    if settings is None:
+        settings = load_settings()
+
+    if not settings.database.url:
+        raise ValueError("DATABASE_URL is not configured.")
+
+    engine = engine or create_db_engine(settings.database.url)
+    session = session or create_session(settings.http, logger=logger)
+
+    logger.info("Iniciando extracao ONS.")
+    target_url = get_dynamic_url(session, settings, logger)
+    if not target_url:
+        logger.warning("Nenhum link CSV encontrado.")
+        return 0
+
+    response = request(session, "GET", target_url, settings=settings.http, logger=logger)
+    response.raise_for_status()
+
+    df_final = transform_carga_ons_csv(response.content, logger)
+    return load_carga_ons(df_final, engine, logger)
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger("etl.ons")
+    try:
+        run_extraction(logger=logger)
+    except Exception:
+        logger.exception("Falha na extracao ONS.")
+        raise
+
 
 if __name__ == "__main__":
-    run_extraction()
+    main()
