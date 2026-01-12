@@ -68,7 +68,7 @@ def run_extraction():
                 "timezone": "America/Sao_Paulo"
             }
             
-            r = requests.get(url, params=params)
+            r = requests.get(url, params=params, timeout=30)
             r.raise_for_status()
             data = r.json()
             

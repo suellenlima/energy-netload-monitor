@@ -13,7 +13,7 @@ def get_dynamic_url():
     """Consulta API do ONS para achar a URL do CSV mais recente"""
     print("🔎 Consultando API do ONS...")
     try:
-        response = requests.get(CKAN_API_URL, verify=False)
+        response = requests.get(CKAN_API_URL, timeout=20)
         data = response.json()
         resources = data['result']['resources']
         ano_atual = str(datetime.now().year)
@@ -68,7 +68,7 @@ def run_extraction():
 
     try:
         print(f"⬇️ Baixando: {target_url}")
-        response = requests.get(target_url, verify=False, timeout=60)
+        response = requests.get(target_url, timeout=60)
         
         df = pd.read_csv(io.BytesIO(response.content), sep=';', decimal=',')
         
@@ -92,6 +92,20 @@ def run_extraction():
         df['time'] = pd.to_datetime(df['time'])
         df['carga_mw'] = pd.to_numeric(df['carga_mw'], errors='coerce')
         df_final = df[['time', 'subsistema', 'carga_mw']].dropna()
+        df_final = df_final.drop_duplicates(subset=['time', 'subsistema'])
+
+        if not df_final.empty:
+            min_time = df_final['time'].min()
+            max_time = df_final['time'].max()
+            subsistemas = df_final['subsistema'].dropna().unique().tolist()
+            if subsistemas:
+                delete_query = text("""
+                    DELETE FROM carga_ons
+                    WHERE time >= :start AND time <= :end
+                    AND subsistema = ANY(:subs)
+                """)
+                with engine.begin() as conn:
+                    conn.execute(delete_query, {"start": min_time, "end": max_time, "subs": subsistemas})
 
         print(f"💾 Inserindo {len(df_final)} registros no Banco...")
         df_final.to_sql('carga_ons', engine, if_exists='append', index=False, method='multi', chunksize=10000)

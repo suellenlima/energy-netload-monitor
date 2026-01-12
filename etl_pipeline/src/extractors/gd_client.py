@@ -8,8 +8,12 @@ import shutil
 GD_URL = "https://dadosabertos.aneel.gov.br/dataset/relacao-de-empreendimentos-de-geracao-distribuida/resource/b1bd71e7-d0ad-4214-9053-cbd58e9564a7/download/empreendimento-geracao-distribuida.csv"
 DB_URL = os.getenv("DATABASE_URL")
 LOCAL_PATH = "/app/data/raw/gd_temp.csv"
+GD_TIMEOUT = int(os.getenv("GD_TIMEOUT", "180"))
+GD_RETRIES = int(os.getenv("GD_RETRIES", "3"))
+GD_BACKOFF = float(os.getenv("GD_BACKOFF", "2"))
 
 def run_extraction():
+    os.makedirs(os.path.dirname(LOCAL_PATH), exist_ok=True)
     print("☀️ Extraindo GD (Versão Limpa sem Warnings)...")
     
     if not DB_URL:
@@ -21,12 +25,24 @@ def run_extraction():
     try:
         # 1. Download Seguro
         if not os.path.exists(LOCAL_PATH):
-            print(f"⬇️ Baixando arquivo da ANEEL...")
-            with requests.get(GD_URL, stream=True, verify=False) as r:
-                r.raise_for_status()
-                with open(LOCAL_PATH, 'wb') as f:
-                    shutil.copyfileobj(r.raw, f)
-            print("✅ Download concluído.")
+            print("Baixando arquivo da ANEEL...")
+            tmp_path = f"{LOCAL_PATH}.partial"
+            for attempt in range(1, GD_RETRIES + 1):
+                try:
+                    with requests.get(GD_URL, stream=True, timeout=GD_TIMEOUT) as r:
+                        r.raise_for_status()
+                        with open(tmp_path, 'wb') as f:
+                            shutil.copyfileobj(r.raw, f)
+                    os.replace(tmp_path, LOCAL_PATH)
+                    break
+                except requests.RequestException as e:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                    if attempt >= GD_RETRIES:
+                        raise
+                    wait_s = GD_BACKOFF * (2 ** (attempt - 1))
+                    print(f"Tentativa {attempt} falhou: {e}. Aguardando {wait_s:.0f}s...")
+            print("Download concluído.")
         else:
             print(f"📂 Usando cache: {LOCAL_PATH}")
 

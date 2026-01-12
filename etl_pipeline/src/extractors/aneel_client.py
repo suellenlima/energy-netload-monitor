@@ -4,11 +4,15 @@ import geopandas as gpd
 from sqlalchemy import create_engine
 import requests
 import io
+import time
 
 # URL Oficial do arquivo CSV (Baseado no Portal de Dados Abertos ANEEL)
 # Se falhar no futuro, procure o link de "siga-empreendimentos-geracao.csv" no site dadosabertos.aneel.gov.br
 SIGA_URL = "https://dadosabertos.aneel.gov.br/dataset/siga-sistema-de-informacoes-de-geracao-da-aneel/resource/11ec447d-698d-4ab8-977f-b424d5deee6a/download/siga-empreendimentos-geracao.csv"
 DB_URL = os.getenv("DATABASE_URL")
+ANEEL_TIMEOUT = int(os.getenv("ANEEL_TIMEOUT", "180"))
+ANEEL_RETRIES = int(os.getenv("ANEEL_RETRIES", "3"))
+ANEEL_BACKOFF = float(os.getenv("ANEEL_BACKOFF", "2"))
 
 def run_extraction():
     print("🚀 Iniciando extração de dados da ANEEL (SIGA)...")
@@ -21,8 +25,18 @@ def run_extraction():
     try:
         print(f"⬇️ Baixando arquivo de: {SIGA_URL}")
         # Baixa o conteúdo com requests para evitar erros de certificado ou redirecionamento
-        response = requests.get(SIGA_URL, verify=False) # verify=False pois gov.br as vezes tem certificado estranho
-        response.raise_for_status()
+        response = None
+        for attempt in range(1, ANEEL_RETRIES + 1):
+            try:
+                response = requests.get(SIGA_URL, timeout=ANEEL_TIMEOUT)
+                response.raise_for_status()
+                break
+            except requests.RequestException as e:
+                if attempt >= ANEEL_RETRIES:
+                    raise
+                wait_s = ANEEL_BACKOFF * (2 ** (attempt - 1))
+                print(f"⚠️ Tentativa {attempt} falhou: {e}. Aguardando {wait_s:.0f}s...")
+                time.sleep(wait_s)
         
         # Lê o CSV da memória
         # O separador é ponto e vírgula e o encoding geralmente é ISO-8859-1 (Latin-1)
