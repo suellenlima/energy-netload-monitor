@@ -1,5 +1,5 @@
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 import numpy as np
 from datetime import datetime, timedelta
 import os
@@ -51,6 +51,19 @@ def gerar_dados_fake_realistas():
         })
 
     df = pd.DataFrame(dados)
+
+    if not df.empty:
+        delete_query = text("""
+            DELETE FROM carga_ons
+            WHERE time >= :inicio AND time <= :fim
+            AND subsistema = :sub
+        """)
+        with engine.begin() as conn:
+            conn.execute(delete_query, {
+                "inicio": inicio,
+                "fim": agora,
+                "sub": "SUDESTE/CENTRO-OESTE"
+            })
     
     # Salva no banco (Append)
     print(f"💾 Inserindo {len(df)} registros horários...")
