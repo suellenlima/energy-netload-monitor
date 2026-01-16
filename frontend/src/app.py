@@ -33,7 +33,7 @@ st.sidebar.markdown("---")
 
 # 3. O SLIDER (Simulador de Impacto)
 st.sidebar.subheader("🤖 Cruzamento com IA")
-multiplicador = st.sidebar.slider("Projeção de Fraudes (Qtd de casos)", 1, 5000, 1)
+multiplicador = st.sidebar.slider("Projeção de Geração Distribuída não mapeada (Qtd de casos)", 1, 5000, 1)
 st.sidebar.info("Arraste para simular o impacto de múltiplas fraudes na rede.")
 
 # =========================================================
@@ -64,7 +64,7 @@ if dados_ia and dados_ia.get('status') == 'ALERTA':
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Detecção Unitária (IA)", f"{dados_ia['fraude_kw']:.2f} kW")
         # O slider altera este valor visualmente
-        c2.metric(f"Projeção ({multiplicador}x)", f"{impacto_projecao_mw:.2f} MW", delta="Carga Fantasma")
+        c2.metric(f"Projeção ({multiplicador}x)", f"{impacto_projecao_mw:.2f} MW", delta="GD Não Mapeada")
         c3.metric("Potência Oficial", f"{dados_ia['oficial_kw']:.2f} kW")
         c4.metric("Ação", "Despacho Térmico", delta="Urgente", delta_color="inverse")
         st.divider()
@@ -140,7 +140,7 @@ if st.sidebar.button("Atualizar Dashboard", type="primary"):
         # Linha Vermelha (Projeção)
         if impacto_projecao_mw > 0 and 'carga_auditada' in df_carga.columns:
             fig.add_trace(go.Scatter(x=df_carga['hora'], y=df_carga['carga_auditada'], mode='lines', name=f'Cenário Projetado ({multiplicador}x)', line=dict(color='#FF0000', width=2, dash='dashdot')))
-            fig.add_trace(go.Scatter(x=df_carga['hora'], y=df_carga['carga_auditada'], fill='tonexty', fillcolor='rgba(255, 0, 0, 0.3)', name='Carga Fantasma', mode='none'))
+            fig.add_trace(go.Scatter(x=df_carga['hora'], y=df_carga['carga_auditada'], fill='tonexty', fillcolor='rgba(255, 0, 0, 0.3)', name='GD Não Mapeada', mode='none'))
 
         fig.update_layout(height=450, template="plotly_dark", title="Impacto das Fraudes na Curva de Carga")
         st.plotly_chart(fig, use_container_width=True)
@@ -195,7 +195,7 @@ if st.sidebar.button("Atualizar Dashboard", type="primary"):
                 fig_gauge = go.Figure(go.Indicator(
                     mode = "gauge+number+delta",
                     value = impacto_projecao_mw,
-                    title = {'text': f"Carga Fantasma ({multiplicador}x)"},
+                    title = {'text': f"GD Não Mapeada ({multiplicador}x)"},
                     delta = {'reference': 0, 'increasing': {'color': "red"}},
                     gauge = {
                         'axis': {'range': [None, max_risco_mw], 'tickwidth': 1},
