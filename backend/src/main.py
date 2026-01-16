@@ -1,57 +1,83 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request, Depends
 from sqlalchemy import create_engine, text
 import os
 from fastapi.responses import JSONResponse
 import geopandas as gpd
 import pandas as pd
 import numpy as np
+import json
 
 app = FastAPI(title="Energy Netload Monitor API")
 
 # Pega a URL do banco das variáveis de ambiente
 DATABASE_URL = os.getenv("DATABASE_URL")
+_ENGINE = None
 
-def get_db_connection():
-    return create_engine(DATABASE_URL).connect()
+def get_engine():
+    global _ENGINE
+    if _ENGINE is None:
+        if not DATABASE_URL:
+            raise_server_error("DATABASE_URL não configurada.")
+        _ENGINE = create_engine(DATABASE_URL, pool_pre_ping=True)
+    return _ENGINE
+
+def get_db():
+    engine = get_engine()
+    conn = engine.connect()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+def raise_server_error(detail: str):
+    raise HTTPException(status_code=500, detail=detail)
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"status": "error", "detail": exc.detail},
+    )
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    print(f"Unhandled error: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"status": "error", "detail": "Erro interno do servidor."},
+    )
 
 @app.get("/")
 def read_root():
     return {"message": "Energy Monitor Online ⚡"}
 
 @app.get("/health")
-def health_check():
+def health_check(conn = Depends(get_db)):
     """Verifica se a conexão com o banco de dados está funcionando."""
-    if not DATABASE_URL:
-        return {"status": "error", "detail": "DATABASE_URL não configurada"}
-    
     try:
-        engine = create_engine(DATABASE_URL)
-        with engine.connect() as connection:
-            result = connection.execute(text("SELECT 1"))
-            return {"status": "ok", "db_response": result.scalar()}
+        result = conn.execute(text("SELECT 1"))
+        return {"status": "ok", "db_response": result.scalar()}
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        print(f"Erro health check: {e}")
+        raise_server_error("Falha ao conectar ao banco.")
 
 @app.get("/usinas/geo")
-def get_usinas_geojson(limite: int = 100):
+def get_usinas_geojson(limite: int = 100, conn = Depends(get_db)):
     """
     Retorna as usinas em formato GeoJSON para colocar no mapa.
     """
     try:
-        engine = create_engine(DATABASE_URL)
         sql = f"SELECT nome, fonte, potencia_kw, geom FROM usinas_siga LIMIT {limite}"
-        gdf = gpd.read_postgis(sql, engine, geom_col="geom")
-        # Converte para dict para o FastAPI serializar corretamente
-        return JSONResponse(content=eval(gdf.to_json()))
+        gdf = gpd.read_postgis(sql, conn, geom_col="geom")
+        # Converte para dict sem usar eval
+        return JSONResponse(content=json.loads(gdf.to_json()))
     except Exception as e:
         print(f"Erro no GeoJSON: {e}")
-        return {}
+        raise_server_error("Falha ao gerar GeoJSON de usinas.")
 
 @app.get("/carga/historico")
-def get_carga_historico(subsistema: str = "SUDESTE"):
+def get_carga_historico(subsistema: str = "SUDESTE", conn = Depends(get_db)):
     """Retorna a curva de carga para gráficos"""
-    engine = create_engine(DATABASE_URL)
-    
     query = text("""
         SELECT 
             time_bucket('1 hour', time) as hora,
@@ -63,16 +89,18 @@ def get_carga_historico(subsistema: str = "SUDESTE"):
         LIMIT 48;
     """)
     
-    with engine.connect() as conn:
+    try:
         result = conn.execute(query, {"sub": subsistema})
         data = [{"hora": row.hora, "mw": row.carga_media} for row in result]
-    
-    return data
+        
+        return data
+    except Exception as e:
+        print(f"Erro ao consultar carga histórica: {e}")
+        raise_server_error("Falha ao consultar carga histórica.")
 
 # --- O CÉREBRO: CÁLCULO DE CARGA OCULTA ---
 @app.get("/analise/carga-oculta")
-def calcular_carga_oculta(subsistema: str = "SUDESTE", distribuidora: str = None):
-    conn = get_db_connection()
+def calcular_carga_oculta(subsistema: str = "SUDESTE", distribuidora: str = None, conn = Depends(get_db)):
     sub_upper = subsistema.upper()
     
     # 1. CÁLCULO DA CAPACIDADE INSTALADA (GD)
@@ -90,7 +118,7 @@ def calcular_carga_oculta(subsistema: str = "SUDESTE", distribuidora: str = None
         cap_solar_mw = conn.execute(query_cap, params_cap).scalar()
     except Exception as e:
         print(f"Erro ao ler GD: {e}")
-        cap_solar_mw = 0
+        raise_server_error("Falha ao consultar capacidade instalada (GD).")
 
     # Fallback (Simulação para Demo)
     if not cap_solar_mw or cap_solar_mw < 10:
@@ -119,8 +147,9 @@ def calcular_carga_oculta(subsistema: str = "SUDESTE", distribuidora: str = None
     
     try:
         result = conn.execute(query, {"sub_simple": sub_simple, "sub_like": sub_like}).fetchall()
-    except:
-        return []
+    except Exception as e:
+        print(f"Erro ao consultar carga/clima: {e}")
+        raise_server_error("Falha ao consultar dados de carga e clima.")
     
     if not result:
         return []
@@ -150,8 +179,7 @@ def calcular_carga_oculta(subsistema: str = "SUDESTE", distribuidora: str = None
     return df.to_dict(orient="records")
 
 @app.get("/analise/classes-consumo")
-def get_classes_consumo(distribuidora: str = None):
-    engine = create_engine(DATABASE_URL)
+def get_classes_consumo(distribuidora: str = None, conn = Depends(get_db)):
     
     filtro = ""
     params = {}
@@ -168,16 +196,15 @@ def get_classes_consumo(distribuidora: str = None):
             ORDER BY total_mw DESC
         """)
         
-        with engine.connect() as conn:
-            result = conn.execute(sql, params).fetchall()
+        result = conn.execute(sql, params).fetchall()
             
         return [{"classe": row.classe, "mw": round(row.total_mw, 2)} for row in result]
-    except:
-        return []
+    except Exception as e:
+        print(f"Erro ao consultar classes de consumo: {e}")
+        raise_server_error("Falha ao consultar classes de consumo.")
 
 @app.get("/analise/alertas-fraude")
-def get_alertas_fraude(distribuidora: str = None):
-    conn = get_db_connection()
+def get_alertas_fraude(distribuidora: str = None, conn = Depends(get_db)):
     
     filtro_sql = ""
     params = {}
@@ -211,12 +238,11 @@ def get_alertas_fraude(distribuidora: str = None):
         }
     except Exception as e:
         print(f"Erro alerta: {e}")
-        return {}
+        raise_server_error("Falha ao consultar alertas de fraude.")
 
 @app.get("/auxiliar/distribuidoras")
-def get_lista_distribuidoras():
+def get_lista_distribuidoras(conn = Depends(get_db)):
     try:
-        conn = get_db_connection()
         query = text("""
             SELECT distribuidora 
             FROM gd_detalhada 
@@ -227,5 +253,6 @@ def get_lista_distribuidoras():
         result = conn.execute(query).fetchall()
         lista = [row.distribuidora for row in result]
         return [""] + lista
-    except:
-        return ["", "CEMIG DISTRIBUICAO S.A", "ENEL DISTRIBUICAO SAO PAULO"] # Fallback seguro
+    except Exception as e:
+        print(f"Erro ao consultar distribuidoras: {e}")
+        raise_server_error("Falha ao consultar distribuidoras.")
