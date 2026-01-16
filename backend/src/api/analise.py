@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
-from core.database import get_engine
-from services.load_calc import (
+from ..core.database import get_engine
+from ..services.load_calc import (
     calculate_hidden_load,
     fetch_classes_consumption,
     fetch_fraud_alert,
