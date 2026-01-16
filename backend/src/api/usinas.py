@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
-from core.database import get_engine
-from services.geospatial import fetch_usinas_geojson
+from ..core.database import get_engine
+from ..services.geospatial import fetch_usinas_geojson
 
 router = APIRouter(prefix="/usinas")
 
