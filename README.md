@@ -37,6 +37,11 @@ Garanta que o servico `etl` esta rodando:
 docker-compose up -d etl
 ```
 
+Criar schema
+```powershell
+Get-Content infrastructure/database/schema.sql | docker compose exec -T db psql -U admin -d energy_monitor
+```
+
 Habilitar PostGIS (se necessario):
 ```powershell
 docker-compose exec db psql -U admin -d energy_monitor -c "CREATE EXTENSION IF NOT EXISTS postgis;"
