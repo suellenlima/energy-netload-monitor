@@ -7,6 +7,6 @@ router = APIRouter(prefix="/auxiliar")
 
 
 @router.get("/distribuidoras")
-def get_lista_distribuidoras():
+def get_lista_distribuidoras(subsistema: str | None = None):
     engine = get_engine()
-    return list_distribuidoras(engine)
+    return list_distribuidoras(engine, subsistema)
