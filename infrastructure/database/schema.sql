@@ -43,10 +43,42 @@ CREATE TABLE IF NOT EXISTS auditoria_visual (
     status TEXT
 );
 
+CREATE TABLE IF NOT EXISTS subestacoes_ons (
+    id SERIAL PRIMARY KEY,
+    nome TEXT UNIQUE,
+    sigla_se TEXT,
+    tensao_kv DOUBLE PRECISION,
+    subsistema TEXT,
+    distribuidora TEXT,
+    latitude DOUBLE PRECISION,
+    longitude DOUBLE PRECISION,
+    fonte_dados TEXT,
+    geom geometry(Point, 4326)
+);
+
+CREATE TABLE IF NOT EXISTS subestacoes_detectadas (
+    id SERIAL PRIMARY KEY,
+    cluster_id INTEGER,
+    nome TEXT,
+    latitude DOUBLE PRECISION,
+    longitude DOUBLE PRECISION,
+    distribuidora TEXT,
+    subsistema TEXT,
+    quantidade_gd INTEGER,
+    potencia_total_mw DOUBLE PRECISION,
+    raio_deteccao_km DOUBLE PRECISION,
+    data_deteccao TIMESTAMPTZ DEFAULT NOW(),
+    geom geometry(Point, 4326)
+);
+
 CREATE INDEX IF NOT EXISTS idx_carga_ons_time ON carga_ons (time);
 CREATE INDEX IF NOT EXISTS idx_carga_ons_subsistema ON carga_ons (subsistema);
 CREATE INDEX IF NOT EXISTS idx_gd_detalhada_distribuidora ON gd_detalhada (distribuidora);
 CREATE INDEX IF NOT EXISTS idx_auditoria_visual_distribuidora ON auditoria_visual (distribuidora);
+CREATE INDEX IF NOT EXISTS idx_subestacoes_ons_distribuidora ON subestacoes_ons (distribuidora);
+CREATE INDEX IF NOT EXISTS idx_subestacoes_ons_subsistema ON subestacoes_ons (subsistema);
+CREATE INDEX IF NOT EXISTS idx_subestacoes_detectadas_distribuidora ON subestacoes_detectadas (distribuidora);
+CREATE INDEX IF NOT EXISTS idx_subestacoes_detectadas_cluster ON subestacoes_detectadas (cluster_id);
 
 SELECT create_hypertable('carga_ons', 'time', if_not_exists => TRUE);
 SELECT create_hypertable('clima_real', 'time', if_not_exists => TRUE);
