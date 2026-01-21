@@ -5,6 +5,7 @@ from components.alerts import fetch_alerta, render_alerta
 from components.audit import render_auditoria
 from components.charts import load_carga_data, render_carga_section, render_classes_consumo
 from components.sidebar import render_sidebar
+from components.subestacoes import render_subestacoes_section
 from config import API_URL, APP_TITLE, LAYOUT
 from services.api_client import ApiClient
 
@@ -23,5 +24,9 @@ if state.refresh:
     render_carga_section(df_carga, impacto_projecao_mw, state.multiplicador, state.subsistema)
     render_classes_consumo(client, state.distribuidora)
     render_auditoria(dados_ia, impacto_projecao_mw, state.multiplicador)
+    
+    # Renderizar seção de subestações
+    st.divider()
+    render_subestacoes_section(client, state.distribuidora)
 else:
     st.info("Selecione os filtros e clique em 'Atualizar Dashboard' para iniciar.")

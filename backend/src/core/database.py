@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -19,3 +19,17 @@ def get_engine() -> Engine:
 
 def get_db_connection():
     return get_engine().connect()
+
+def table_exists(table_name: str, engine: Engine | None = None) -> bool:
+    """Verificar se uma tabela existe no banco de dados."""
+    engine = engine or get_engine()
+    inspector = inspect(engine)
+    return table_name in inspector.get_table_names()
+
+def delete_all_rows(table_name: str, engine: Engine | None = None) -> int:
+    """Deletar todas as linhas de uma tabela."""
+    engine = engine or get_engine()
+    with engine.connect() as conn:
+        result = conn.execute(text(f"DELETE FROM {table_name}"))
+        conn.commit()
+        return result.rowcount
