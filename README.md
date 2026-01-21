@@ -51,6 +51,7 @@ Executar extracoes:
 ```powershell
 docker-compose exec etl python src/extractors/aneel_client.py
 docker-compose exec etl python src/extractors/ons_client.py
+docker-compose exec etl python src/extractors/subestacoes_client.py
 docker-compose exec etl python src/extractors/gd_client.py
 docker-compose exec etl python src/extractors/inpe_weather_client.py
 docker-compose exec etl python src/fix_data.py

@@ -105,23 +105,30 @@ def fetch_fraud_alert(engine: Engine, distribuidora: str | None = None) -> dict:
 	}
 
 
-def list_distribuidoras(engine: Engine, limit: int = 50) -> list[str]:
-	query = text("""
-		SELECT distribuidora 
-		FROM gd_detalhada 
-		GROUP BY distribuidora 
-		ORDER BY SUM(potencia_mw) DESC
+def list_distribuidoras(engine: Engine, subsistema: str | None = None, limit: int = 50) -> list[str]:
+	where_clause = ""
+	params = {"limit": limit}
+	
+	if subsistema:
+		where_clause = "WHERE subsistema ILIKE :subsistema"
+		params["subsistema"] = f"%{subsistema}%"
+	
+	query = text(f"""
+		SELECT DISTINCT distribuidora 
+		FROM subestacoes_ons
+		{where_clause}
+		ORDER BY distribuidora
 		LIMIT :limit
 	""")
 
 	try:
 		with engine.connect() as conn:
-			result = conn.execute(query, {"limit": limit}).fetchall()
+			result = conn.execute(query, params).fetchall()
 			names = [row.distribuidora for row in result]
 			return [""] + names
 	except Exception as exc:
 		print(f"Erro ao listar distribuidoras: {exc}")
-		return ["", "CEMIG DISTRIBUICAO S.A", "ENEL DISTRIBUICAO SAO PAULO"]
+		return ["", "COPEL-GT", "CEMIG GT", "CPFL PAULISTA"]
 
 
 def _build_distrib_filter(distribuidora: str | None) -> tuple[str, dict]:

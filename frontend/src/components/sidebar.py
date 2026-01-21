@@ -15,8 +15,8 @@ class SidebarState:
     refresh: bool
 
 
-def _load_distribuidoras(client: ApiClient) -> List[str]:
-    result = client.get("/auxiliar/distribuidoras")
+def _load_distribuidoras(client: ApiClient, subsistema: str | None = None) -> List[str]:
+    result = client.get("/auxiliar/distribuidoras", params={"subsistema": subsistema})
     if result.error:
         show_error(result.error, location="sidebar")
         return [""]
@@ -34,7 +34,7 @@ def render_sidebar(client: ApiClient) -> SidebarState:
     )
 
     st.sidebar.subheader("Análise por Distribuidora")
-    opcoes_distribuidoras = _load_distribuidoras(client)
+    opcoes_distribuidoras = _load_distribuidoras(client, subsistema)
     distribuidora = st.sidebar.selectbox("Concessão (GD):", opcoes_distribuidoras)
 
     st.sidebar.markdown("---")
