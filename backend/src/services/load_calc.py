@@ -154,3 +154,69 @@ def _corrigir_sol(row: pd.Series) -> float:
 	if 6 <= hora <= 18 and row["sol_wm2"] < 10:
 		return np.sin(np.pi * (hora - 6) / 12) * 800
 	return row["sol_wm2"]
+
+
+def fetch_establishment_counts(engine: Engine, distribuidora: str | None = None) -> list[dict]:
+	"""Retorna contagem de estabelecimentos por tipo."""
+	filter_clause, params = _build_distrib_filter(distribuidora)
+
+	query = text(f"""
+		SELECT
+			tipo_estabelecimento as tipo,
+			COUNT(*) as quantidade,
+			SUM(qtd_unidades) as total_unidades,
+			SUM(potencia_kw) / 1000 as total_mw
+		FROM gd_granular
+		{filter_clause}
+		GROUP BY tipo_estabelecimento
+		ORDER BY quantidade DESC
+	""")
+
+	try:
+		with engine.connect() as conn:
+			result = conn.execute(query, params).fetchall()
+	except Exception as exc:
+		print(f"Erro ao buscar contagens: {exc}")
+		return []
+
+	return [
+		{
+			"tipo": row.tipo,
+			"quantidade": int(row.quantidade or 0),
+			"total_unidades": int(row.total_unidades or 0),
+			"total_mw": round(row.total_mw or 0, 2)
+		}
+		for row in result
+	]
+
+
+def fetch_granular_summary(engine: Engine, distribuidora: str | None = None) -> dict:
+	"""Retorna resumo geral dos dados granulares."""
+	filter_clause, params = _build_distrib_filter(distribuidora)
+
+	query = text(f"""
+		SELECT
+			COUNT(*) as total_instalacoes,
+			SUM(qtd_unidades) as total_unidades,
+			SUM(potencia_kw) / 1000 as total_mw
+		FROM gd_granular
+		{filter_clause}
+	""")
+
+	try:
+		with engine.connect() as conn:
+			result = conn.execute(query, params).fetchone()
+			counts = fetch_establishment_counts(engine, distribuidora)
+	except Exception as exc:
+		print(f"Erro ao buscar resumo: {exc}")
+		return {}
+
+	if not result:
+		return {}
+
+	return {
+		"total_instalacoes": int(result.total_instalacoes or 0),
+		"total_unidades_consumidoras": int(result.total_unidades or 0),
+		"total_mw": round(result.total_mw or 0, 2),
+		"por_tipo": {item["tipo"]: item for item in counts}
+	}
