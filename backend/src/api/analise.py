@@ -5,6 +5,8 @@ from ..services.load_calc import (
     calculate_hidden_load,
     fetch_classes_consumption,
     fetch_fraud_alert,
+    fetch_establishment_counts,
+    fetch_granular_summary,
 )
 
 router = APIRouter(prefix="/analise")
@@ -26,3 +28,17 @@ def get_classes_consumo(distribuidora: str | None = None):
 def get_alertas_fraude(distribuidora: str | None = None):
     engine = get_engine()
     return fetch_fraud_alert(engine, distribuidora)
+
+
+@router.get("/estabelecimentos/contagem")
+def get_contagem_estabelecimentos(distribuidora: str | None = None):
+    """Retorna contagem de estabelecimentos por tipo."""
+    engine = get_engine()
+    return fetch_establishment_counts(engine, distribuidora)
+
+
+@router.get("/estabelecimentos/resumo")
+def get_resumo_estabelecimentos(distribuidora: str | None = None):
+    """Retorna resumo geral dos dados granulares."""
+    engine = get_engine()
+    return fetch_granular_summary(engine, distribuidora)
