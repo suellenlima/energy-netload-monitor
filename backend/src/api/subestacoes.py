@@ -4,15 +4,17 @@ Fornece API para subestações públicas (ONS) e detectadas (clustering).
 """
 
 import logging
+import uuid
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, BackgroundTasks, Query
 
-from ..core import DatabaseError
+from ..core import DatabaseError, get_engine
 from ..schemas import (
     AtualizarDetectadasResponse,
     SubestacaoDetectadaResponse,
     SubestacaoONSResponse,
     SubestacaoResumo,
+    TaskAsyncResponse,
 )
 from ..services.subestacoes_clustering import (
     detect_subestacoes_by_clustering,
@@ -75,7 +77,7 @@ def atualizar_subestacoes_detectadas(
     eps_km: float = Query(default=5.0, ge=0.5, le=50.0, description="Raio de busca em km"),
 ):
     """
-    Executa detecção de subestações via clustering e armazena resultados.
+    Executa detecção de subestações via clustering e armazena resultados (síncrono).
 
     - **distribuidora**: Processar apenas uma distribuidora (opcional)
     - **eps_km**: Raio de busca em km para clustering (default 5 km)
@@ -106,6 +108,73 @@ def atualizar_subestacoes_detectadas(
     except Exception as exc:
         logger.error(f"Erro ao atualizar subestações: {exc}", exc_info=True)
         raise DatabaseError("Falha ao executar clustering") from exc
+
+
+def _run_clustering_background(
+    task_id: str,
+    distribuidora: str | None,
+    eps_km: float,
+) -> None:
+    """
+    Executa clustering em background.
+
+    Args:
+        task_id: ID da tarefa para logging
+        distribuidora: Filtrar por distribuidora (opcional)
+        eps_km: Raio de busca em km
+    """
+    logger.info(f"[Task {task_id}] Iniciando clustering em background")
+    try:
+        engine = get_engine()
+        df_detectadas = detect_subestacoes_by_clustering(
+            engine,
+            distribuidora=distribuidora,
+            eps_km=eps_km,
+            logger=logger,
+        )
+
+        if df_detectadas.empty:
+            logger.info(f"[Task {task_id}] Nenhuma subestação detectada")
+            return
+
+        quantidade = load_detected_subestacoes(df_detectadas, engine, logger)
+        logger.info(f"[Task {task_id}] Concluído: {quantidade} subestações detectadas")
+
+    except Exception as exc:
+        logger.error(f"[Task {task_id}] Erro no clustering: {exc}", exc_info=True)
+
+
+@router.post("/detectadas/atualizar-async", response_model=TaskAsyncResponse)
+def atualizar_subestacoes_async(
+    background_tasks: BackgroundTasks,
+    distribuidora: DistribuidoraQuery = None,
+    eps_km: float = Query(default=5.0, ge=0.5, le=50.0, description="Raio de busca em km"),
+):
+    """
+    Inicia detecção de subestações em background (assíncrono).
+
+    Retorna imediatamente com um task_id para acompanhamento.
+    O processamento continua em background.
+
+    - **distribuidora**: Processar apenas uma distribuidora (opcional)
+    - **eps_km**: Raio de busca em km para clustering (default 5 km)
+    """
+    task_id = str(uuid.uuid4())[:8]
+
+    background_tasks.add_task(
+        _run_clustering_background,
+        task_id=task_id,
+        distribuidora=distribuidora,
+        eps_km=eps_km,
+    )
+
+    logger.info(f"[Task {task_id}] Tarefa de clustering agendada")
+
+    return TaskAsyncResponse(
+        status="iniciado",
+        task_id=task_id,
+        mensagem="Processamento iniciado em background. Consulte /detectadas para ver os resultados.",
+    )
 
 
 def _df_to_geojson_features(df, property_mapping: dict, tipo: str) -> list[dict]:

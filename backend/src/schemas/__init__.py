@@ -14,6 +14,7 @@ from .subestacao import (
     SubestacaoDetectadaResponse,
     SubestacaoONSResponse,
     SubestacaoResumo,
+    TaskAsyncResponse,
 )
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "SubestacaoResumo",
     "AtualizarDetectadasRequest",
     "AtualizarDetectadasResponse",
+    "TaskAsyncResponse",
     # Analise
     "CargaOcultaItem",
     "ClasseConsumoItem",

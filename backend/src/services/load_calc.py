@@ -7,6 +7,9 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from ..core.cache import cached
+from ..core.database import get_engine
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,7 +60,18 @@ def calculate_hidden_load(
 	return df.to_dict(orient="records")
 
 
-def fetch_classes_consumption(engine: Engine, distribuidora: str | None = None) -> list[dict]:
+def fetch_classes_consumption(engine: Engine | None = None, distribuidora: str | None = None) -> list[dict]:
+	"""
+	Busca consumo por classe.
+	Usa cache de 10 minutos para evitar queries repetidas.
+	"""
+	return _fetch_classes_consumption_cached(distribuidora)
+
+
+@cached(ttl_seconds=600)  # Cache de 10 minutos
+def _fetch_classes_consumption_cached(distribuidora: str | None = None) -> list[dict]:
+	"""Versão cacheada da busca de classes de consumo."""
+	engine = get_engine()
 	filter_clause, params = _build_distrib_filter(distribuidora)
 	query = text(f"""
 		SELECT classe, SUM(potencia_mw) as total_mw
@@ -109,16 +123,27 @@ def fetch_fraud_alert(engine: Engine, distribuidora: str | None = None) -> dict:
 	}
 
 
-def list_distribuidoras(engine: Engine, subsistema: str | None = None, limit: int = 50) -> list[str]:
+def list_distribuidoras(engine: Engine | None = None, subsistema: str | None = None, limit: int = 50) -> list[str]:
+	"""
+	Lista distribuidoras disponíveis.
+	Usa cache de 10 minutos para evitar queries repetidas.
+	"""
+	return _list_distribuidoras_cached(subsistema, limit)
+
+
+@cached(ttl_seconds=600)  # Cache de 10 minutos
+def _list_distribuidoras_cached(subsistema: str | None = None, limit: int = 50) -> list[str]:
+	"""Versão cacheada da busca de distribuidoras."""
+	engine = get_engine()
 	where_clause = ""
 	params = {"limit": limit}
-	
+
 	if subsistema:
 		where_clause = "WHERE subsistema ILIKE :subsistema"
 		params["subsistema"] = f"%{subsistema}%"
-	
+
 	query = text(f"""
-		SELECT DISTINCT distribuidora 
+		SELECT DISTINCT distribuidora
 		FROM subestacoes_ons
 		{where_clause}
 		ORDER BY distribuidora

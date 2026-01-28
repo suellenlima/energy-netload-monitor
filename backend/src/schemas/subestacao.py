@@ -74,3 +74,11 @@ class AtualizarDetectadasResponse(BaseModel):
     mensagem: str
     quantidade: int
     raio_km: float | None = None
+
+
+class TaskAsyncResponse(BaseModel):
+    """Response para tarefas executadas em background."""
+
+    status: str
+    task_id: str
+    mensagem: str
