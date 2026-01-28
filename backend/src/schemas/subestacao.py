@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 class SubestacaoONSResponse(BaseModel):
     """Subestação do ONS (dados públicos oficiais)."""
 
-    id: int
+    id: str
     nome: str
     sigla_se: str | None = None
     tensao_kv: float | None = None

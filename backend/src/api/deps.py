@@ -40,16 +40,16 @@ AnaliseRepoDepends = Annotated[
 ]
 
 
-# Query parameters comuns
+# Query parameters comuns - sem default no Query (usar = no parâmetro)
 LimiteQuery = Annotated[
     int,
-    Query(default=100, ge=1, le=1000, description="Máximo de registros")
+    Query(ge=1, le=1000, description="Máximo de registros")
 ]
 DistribuidoraQuery = Annotated[
     str | None,
-    Query(default=None, description="Filtrar por distribuidora")
+    Query(description="Filtrar por distribuidora")
 ]
 SubsistemaQuery = Annotated[
     str,
-    Query(default="SUDESTE", description="Subsistema elétrico")
+    Query(description="Subsistema elétrico")
 ]
