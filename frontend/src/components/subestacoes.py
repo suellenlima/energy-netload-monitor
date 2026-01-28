@@ -104,7 +104,7 @@ def render_tab_subestacoes_detectadas(client: ApiClient, distribuidora: str | No
     ]].copy()
     
     df_display.columns = [
-        "Nome", "Cluster", "GD Count", "Potência (MW)", 
+        "Nome", "Cluster", "MMGD Count", "Potência (MW)", 
         "Raio (km)", "Subsistema", "Distribuidora"
     ]
     

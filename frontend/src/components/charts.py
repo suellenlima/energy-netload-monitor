@@ -51,7 +51,7 @@ def render_carga_section(
     hora_pico = df_carga.loc[df_carga["estimativa_solar_mw"].idxmax(), "hora"].strftime("%Hh")
 
     col1.metric("Carga Rede (ONS)", f"{carga_atual:,.0f} MW")
-    col2.metric("GD Distribuída (Agora)", f"{oculta_oficial:,.0f} MW", delta="Oficial")
+    col2.metric("MMGD Distribuída (Agora)", f"{oculta_oficial:,.0f} MW", delta="Oficial")
 
     if impacto_projecao_mw > 0:
         col3.metric(
@@ -125,7 +125,7 @@ def render_classes_consumo(client: ApiClient, distribuidora: str) -> None:
         return
 
     st.markdown("---")
-    st.header("Detalhamento da Concessão")
+    st.header("Detalhamento da Distribuidora")
     c1, c2 = st.columns([1, 2])
     with c1:
         st.dataframe(df_classes, use_container_width=True, hide_index=True)
@@ -155,8 +155,8 @@ def render_estabelecimentos_section(client: ApiClient, distribuidora: str) -> No
 
     # Métricas principais
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Instalações GD", f"{resumo['total_instalacoes']:,}")
-    col2.metric("Unidades Consumidoras", f"{resumo['total_unidades_consumidoras']:,}")
+    col1.metric("Total Instalações MMGD", f"{resumo['total_instalacoes']:,}")
+    col2.metric("Unidades Consumidoras (UC)", f"{resumo['total_unidades_consumidoras']:,}")
     col3.metric("Potência Total", f"{resumo['total_mw']:,.0f} MW")
     col4.metric("Média por UC", f"{resumo['total_mw'] / resumo['total_unidades_consumidoras'] * 1000:.1f} kW")
 
@@ -194,7 +194,7 @@ def render_estabelecimentos_section(client: ApiClient, distribuidora: str) -> No
             df_contagens,
             values="total_mw",
             names="tipo_label",
-            title="Capacidade Instalada (MW)",
+            title="Capacidade Instalada (%)",
             hole=0.4
         )
         fig_mw.update_layout(template="plotly_dark")
@@ -203,5 +203,5 @@ def render_estabelecimentos_section(client: ApiClient, distribuidora: str) -> No
     # Tabela detalhada
     st.subheader("Tabela Detalhada")
     df_display = df_contagens[["tipo_label", "quantidade", "total_unidades", "total_mw"]].copy()
-    df_display.columns = ["Tipo", "Instalações", "Unidades Consumidoras", "Potência (MW)"]
+    df_display.columns = ["Tipo", "Instalações", "Unidades Consumidoras (UC)", "Potência (MW)"]
     st.dataframe(df_display, use_container_width=True, hide_index=True)
