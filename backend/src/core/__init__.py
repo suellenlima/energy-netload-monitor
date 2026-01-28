@@ -1,5 +1,6 @@
-"""Core module - database utilities, logging, config and exception handling."""
+"""Core module - database utilities, logging, config, cache and exception handling."""
 
+from .cache import cached, get_cache_stats, invalidate_cache
 from .config import Settings, get_settings
 from .database import (
     delete_all_rows,
@@ -22,6 +23,10 @@ __all__ = [
     # Config
     "Settings",
     "get_settings",
+    # Cache
+    "cached",
+    "invalidate_cache",
+    "get_cache_stats",
     # Database
     "get_engine",
     "get_db_connection",
