@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import os
 from time import time
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+from .config import get_settings
 
 _engine: Engine | None = None
 
 # Cache para verificação de existência de tabelas
 _table_cache: dict[str, tuple[bool, float]] = {}
-_CACHE_TTL = 300  # 5 minutos
 
 # Whitelist de tabelas permitidas para operações de deleção
 ALLOWED_DELETE_TABLES = frozenset([
@@ -24,14 +22,15 @@ def get_engine() -> Engine:
     """Retorna engine SQLAlchemy com pool de conexões otimizado."""
     global _engine
     if _engine is None:
-        if not DATABASE_URL:
+        settings = get_settings()
+        if not settings.database_url:
             raise RuntimeError("DATABASE_URL não configurada")
         _engine = create_engine(
-            DATABASE_URL,
-            pool_size=10,
-            max_overflow=20,
+            settings.database_url,
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
             pool_pre_ping=True,
-            pool_recycle=3600,
+            pool_recycle=settings.db_pool_recycle,
         )
     return _engine
 
@@ -41,16 +40,17 @@ def get_db_connection():
 def table_exists(table_name: str, engine: Engine | None = None) -> bool:
     """
     Verificar se uma tabela existe no banco de dados.
-    Usa cache com TTL de 5 minutos para evitar chamadas repetidas a inspect().
+    Usa cache com TTL configurável para evitar chamadas repetidas a inspect().
     """
     global _table_cache
+    settings = get_settings()
     engine = engine or get_engine()
     cache_key = table_name
 
     # Verificar cache
     if cache_key in _table_cache:
         exists, cached_at = _table_cache[cache_key]
-        if time() - cached_at < _CACHE_TTL:
+        if time() - cached_at < settings.cache_ttl_seconds:
             return exists
 
     # Cache expirado ou não existe - buscar do banco
