@@ -10,15 +10,19 @@ from .core import (
     AppException,
     app_exception_handler,
     generic_exception_handler,
+    get_settings,
     setup_logging,
 )
 
+# Carregar configurações
+settings = get_settings()
+
 # Configurar logging estruturado
-setup_logging()
+setup_logging(settings.log_level)
 
 app = FastAPI(
-    title="Energy Netload Monitor API",
-    version="1.0.0",
+    title=settings.api_title,
+    version=settings.api_version,
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -26,7 +30,7 @@ app = FastAPI(
 # Middleware CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

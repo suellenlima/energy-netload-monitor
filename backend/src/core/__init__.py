@@ -1,5 +1,6 @@
-"""Core module - database utilities, logging and exception handling."""
+"""Core module - database utilities, logging, config and exception handling."""
 
+from .config import Settings, get_settings
 from .database import (
     delete_all_rows,
     get_db_connection,
@@ -18,6 +19,9 @@ from .exceptions import (
 from .logging_config import get_logger, setup_logging
 
 __all__ = [
+    # Config
+    "Settings",
+    "get_settings",
     # Database
     "get_engine",
     "get_db_connection",
