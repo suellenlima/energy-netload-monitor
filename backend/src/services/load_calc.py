@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_hidden_load(
@@ -40,7 +44,7 @@ def calculate_hidden_load(
 				query, {"sub_simple": sub_simple, "sub_like": sub_like}
 			).fetchall()
 	except Exception as exc:
-		print(f"Erro ao calcular carga oculta: {exc}")
+		logger.error(f"Erro ao calcular carga oculta: {exc}", exc_info=True)
 		return []
 
 	if not result:
@@ -67,7 +71,7 @@ def fetch_classes_consumption(engine: Engine, distribuidora: str | None = None) 
 		with engine.connect() as conn:
 			result = conn.execute(query, params).fetchall()
 	except Exception as exc:
-		print(f"Erro ao buscar classes de consumo: {exc}")
+		logger.error(f"Erro ao buscar classes de consumo: {exc}", exc_info=True)
 		return []
 
 	return [
@@ -88,7 +92,7 @@ def fetch_fraud_alert(engine: Engine, distribuidora: str | None = None) -> dict:
 		with engine.connect() as conn:
 			result = conn.execute(query, params).fetchone()
 	except Exception as exc:
-		print(f"Erro ao buscar alertas de fraude: {exc}")
+		logger.error(f"Erro ao buscar alertas de fraude: {exc}", exc_info=True)
 		return {}
 
 	if not result:
@@ -127,7 +131,7 @@ def list_distribuidoras(engine: Engine, subsistema: str | None = None, limit: in
 			names = [row.distribuidora for row in result]
 			return [""] + names
 	except Exception as exc:
-		print(f"Erro ao listar distribuidoras: {exc}")
+		logger.error(f"Erro ao listar distribuidoras: {exc}", exc_info=True)
 		return ["", "COPEL-GT", "CEMIG GT", "CPFL PAULISTA"]
 
 
@@ -176,7 +180,7 @@ def fetch_establishment_counts(engine: Engine, distribuidora: str | None = None)
 		with engine.connect() as conn:
 			result = conn.execute(query, params).fetchall()
 	except Exception as exc:
-		print(f"Erro ao buscar contagens: {exc}")
+		logger.error(f"Erro ao buscar contagens: {exc}", exc_info=True)
 		return []
 
 	return [
@@ -208,7 +212,7 @@ def fetch_granular_summary(engine: Engine, distribuidora: str | None = None) -> 
 			result = conn.execute(query, params).fetchone()
 			counts = fetch_establishment_counts(engine, distribuidora)
 	except Exception as exc:
-		print(f"Erro ao buscar resumo: {exc}")
+		logger.error(f"Erro ao buscar resumo: {exc}", exc_info=True)
 		return {}
 
 	if not result:
