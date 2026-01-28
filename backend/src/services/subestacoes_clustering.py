@@ -199,26 +199,28 @@ def _generate_subestacao_records(
 def _calculate_max_distance(gdf: gpd.GeoDataFrame, center: Tuple[float, float]) -> float:
     """
     Calcula distância máxima entre centróide e pontos do cluster.
+    Usa operações vetorizadas NumPy para melhor performance.
     """
-    from math import radians, cos, sin, asin, sqrt
-    
-    def haversine(lon1, lat1, lon2, lat2):
-        lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
-        dlon = lon2 - lon1
-        dlat = lat2 - lat1
-        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-        c = 2 * asin(sqrt(a))
-        km = 6371 * c
-        return km
-    
+    if gdf.empty:
+        return 0.0
+
     center_lon, center_lat = center
-    max_dist = 0
-    
-    for _, row in gdf.iterrows():
-        dist = haversine(center_lon, center_lat, row["longitude"], row["latitude"])
-        max_dist = max(max_dist, dist)
-    
-    return max_dist
+
+    # Converter para radianos de forma vetorizada
+    lon1 = np.radians(center_lon)
+    lat1 = np.radians(center_lat)
+    lon2 = np.radians(gdf["longitude"].values)
+    lat2 = np.radians(gdf["latitude"].values)
+
+    # Fórmula de Haversine vetorizada
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    c = 2 * np.arcsin(np.sqrt(a))
+    km = 6371 * c
+
+    return float(np.max(km)) if len(km) > 0 else 0.0
 
 
 def _infer_subsistema(latitude: float) -> str:

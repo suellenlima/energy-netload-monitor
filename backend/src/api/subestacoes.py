@@ -62,22 +62,24 @@ def get_subestacoes_ons(distribuidora: str | None = None, limite: int = 100):
 def get_subestacoes_detectadas(distribuidora: str | None = None, limite: int = 100):
     """
     Lista subestações detectadas automaticamente via clustering de GD.
-    
+
     Parâmetros:
     - distribuidora: Filtrar por distribuidora (opcional)
     - limite: Máximo de registros (default 100)
     """
     try:
-        import pandas as pd
-        from sqlalchemy import text, inspect
         import logging
-        
+
+        import pandas as pd
+        from sqlalchemy import text
+
+        from ..core.database import table_exists
+
         logger = logging.getLogger("api.subestacoes")
         engine = get_engine()
-        
-        # Verificar se tabela existe
-        insp = inspect(engine)
-        if "subestacoes_detectadas" not in insp.get_table_names():
+
+        # Verificar se tabela existe (usa cache)
+        if not table_exists("subestacoes_detectadas", engine):
             logger.info("Tabela subestacoes_detectadas não existe ainda")
             return []
         
@@ -154,25 +156,56 @@ def atualizar_subestacoes_detectadas(distribuidora: str | None = None, eps_km: f
         raise HTTPException(status_code=500, detail=f"Erro ao atualizar subestações: {exc}")
 
 
+def _df_to_geojson_features(df, property_mapping: dict, tipo: str) -> list[dict]:
+    """
+    Converte DataFrame em features GeoJSON de forma vetorizada.
+    Muito mais eficiente que iterrows().
+    """
+    if df.empty:
+        return []
+
+    features = []
+    records = df.to_dict(orient="records")
+
+    for row in records:
+        properties = {
+            prop_name: row.get(col_name)
+            for prop_name, col_name in property_mapping.items()
+        }
+        properties["tipo"] = tipo
+
+        features.append({
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [row["longitude"], row["latitude"]]
+            },
+            "properties": properties
+        })
+
+    return features
+
+
 @router.get("/geo")
 def get_subestacoes_geojson(origem: str = "ambas", limite: int = 100):
     """
     Retorna subestações em formato GeoJSON.
-    
+
     Parâmetros:
     - origem: "ons", "detectadas" ou "ambas" (default)
     - limite: Máximo de registros por origem
     """
     try:
+        import pandas as pd
+        from sqlalchemy import text
+
+        from ..core.database import table_exists
+
         engine = get_engine()
         features = []
-        
-        from sqlalchemy import text
-        
+
         # Buscar subestações ONS
         if origem in ["ons", "ambas"]:
-            import pandas as pd
-            
             query_ons = text("""
                 SELECT id_estacao as id, nome, sigla_se, tensao_kv, subsistema, distribuidora,
                        latitude, longitude, 'ONS' as origem
@@ -180,69 +213,47 @@ def get_subestacoes_geojson(origem: str = "ambas", limite: int = 100):
                 LIMIT :limite
             """)
             df_ons = pd.read_sql(query_ons, engine, params={"limite": limite})
-            
-            for _, row_data in df_ons.iterrows():
-                row_dict = row_data.to_dict()
-                features.append({
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [row_dict["longitude"], row_dict["latitude"]]
-                    },
-                    "properties": {
-                        "id": row_dict["id"],
-                        "nome": row_dict["nome"],
-                        "sigla": row_dict["sigla_se"],
-                        "tensao_kv": row_dict["tensao_kv"],
-                        "subsistema": row_dict["subsistema"],
-                        "distribuidora": row_dict["distribuidora"],
-                        "origem": row_dict["origem"],
-                        "tipo": "subestacao_ons"
-                    }
-                })
-        
-        # Buscar subestações detectadas
+
+            ons_mapping = {
+                "id": "id",
+                "nome": "nome",
+                "sigla": "sigla_se",
+                "tensao_kv": "tensao_kv",
+                "subsistema": "subsistema",
+                "distribuidora": "distribuidora",
+                "origem": "origem",
+            }
+            features.extend(_df_to_geojson_features(df_ons, ons_mapping, "subestacao_ons"))
+
+        # Buscar subestações detectadas (usa cache de table_exists)
         if origem in ["detectadas", "ambas"]:
-            import pandas as pd
-            from sqlalchemy import inspect
-            
-            # Verificar se tabela existe
-            insp = inspect(engine)
-            if "subestacoes_detectadas" in insp.get_table_names():
+            if table_exists("subestacoes_detectadas", engine):
                 query_det = text("""
                     SELECT id, cluster_id, nome, latitude, longitude, distribuidora,
-                           subsistema, quantidade_gd, potencia_total_mw
+                           subsistema, quantidade_gd, potencia_total_mw,
+                           'DETECTADA' as origem
                     FROM subestacoes_detectadas
                     LIMIT :limite
                 """)
                 df_det = pd.read_sql(query_det, engine, params={"limite": limite})
-                
-                for _, row_data in df_det.iterrows():
-                    row_dict = row_data.to_dict()
-                    features.append({
-                        "type": "Feature",
-                        "geometry": {
-                            "type": "Point",
-                            "coordinates": [row_dict["longitude"], row_dict["latitude"]]
-                        },
-                        "properties": {
-                            "id": row_dict["id"],
-                            "nome": row_dict["nome"],
-                            "cluster_id": row_dict["cluster_id"],
-                            "distribuidora": row_dict["distribuidora"],
-                            "subsistema": row_dict["subsistema"],
-                            "quantidade_gd": row_dict["quantidade_gd"],
-                        "potencia_total_mw": row_dict["potencia_total_mw"],
-                        "origem": "DETECTADA",
-                        "tipo": "subestacao_detectada"
-                    }
-                })
-        
+
+                det_mapping = {
+                    "id": "id",
+                    "nome": "nome",
+                    "cluster_id": "cluster_id",
+                    "distribuidora": "distribuidora",
+                    "subsistema": "subsistema",
+                    "quantidade_gd": "quantidade_gd",
+                    "potencia_total_mw": "potencia_total_mw",
+                    "origem": "origem",
+                }
+                features.extend(_df_to_geojson_features(df_det, det_mapping, "subestacao_detectada"))
+
         return {
             "type": "FeatureCollection",
             "features": features
         }
-    
+
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar GeoJSON: {exc}")
 
@@ -254,13 +265,14 @@ def get_subestacoes_resumo():
     """
     try:
         import pandas as pd
-        from sqlalchemy import text, inspect
-        
+        from sqlalchemy import text
+
+        from ..core.database import table_exists
+
         engine = get_engine()
-        insp = inspect(engine)
-        
-        # Se tabela detectadas não existe, retornar só ONS
-        if "subestacoes_detectadas" not in insp.get_table_names():
+
+        # Se tabela detectadas não existe, retornar só ONS (usa cache)
+        if not table_exists("subestacoes_detectadas", engine):
             query = text("""
                 SELECT 
                     distribuidora,
