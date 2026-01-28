@@ -14,6 +14,11 @@ _engine: Engine | None = None
 _table_cache: dict[str, tuple[bool, float]] = {}
 _CACHE_TTL = 300  # 5 minutos
 
+# Whitelist de tabelas permitidas para operações de deleção
+ALLOWED_DELETE_TABLES = frozenset([
+    "subestacoes_detectadas",
+])
+
 
 def get_engine() -> Engine:
     """Retorna engine SQLAlchemy com pool de conexões otimizado."""
@@ -69,8 +74,23 @@ def invalidate_table_cache(table_name: str | None = None) -> None:
 def delete_all_rows(table_name: str, engine: Engine | None = None) -> int:
     """
     Deletar todas as linhas de uma tabela.
-    Nota: table_name deve ser validado antes de chamar esta função.
+
+    Args:
+        table_name: Nome da tabela (deve estar na whitelist ALLOWED_DELETE_TABLES)
+        engine: Engine SQLAlchemy (opcional)
+
+    Returns:
+        Número de linhas deletadas
+
+    Raises:
+        ValueError: Se a tabela não estiver na whitelist
     """
+    if table_name not in ALLOWED_DELETE_TABLES:
+        raise ValueError(
+            f"Tabela '{table_name}' não permitida para deleção. "
+            f"Tabelas permitidas: {', '.join(ALLOWED_DELETE_TABLES)}"
+        )
+
     engine = engine or get_engine()
     with engine.connect() as conn:
         result = conn.execute(text(f"DELETE FROM {table_name}"))

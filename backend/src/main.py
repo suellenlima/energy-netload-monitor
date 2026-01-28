@@ -1,13 +1,42 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from .api.analise import router as analise_router
 from .api.auxiliar import router as auxiliar_router
 from .api.health import router as health_router
-from .api.usinas import router as usinas_router
 from .api.subestacoes import router as subestacoes_router
+from .api.usinas import router as usinas_router
+from .core import (
+    AppException,
+    app_exception_handler,
+    generic_exception_handler,
+    setup_logging,
+)
 
-app = FastAPI(title="Energy Netload Monitor API")
+# Configurar logging estruturado
+setup_logging()
 
+app = FastAPI(
+    title="Energy Netload Monitor API",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+# Middleware CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Exception handlers
+app.add_exception_handler(AppException, app_exception_handler)
+app.add_exception_handler(Exception, generic_exception_handler)
+
+# Routers
 app.include_router(health_router)
 app.include_router(usinas_router)
 app.include_router(analise_router)
