@@ -1,0 +1,12 @@
+# Dataset Config - Solar Panels Detection
+path: /home/jovyan/work/data/solar_panels_detection_dataset  # dataset root
+train: images/train
+val: images/val
+test: images/test
+
+# Classes
+nc: 1  # número de classes
+names: ['solar_panel']  # nomes das classes
+
+# Dataset info
+info: Solar Panel Detection
