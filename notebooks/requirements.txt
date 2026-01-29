@@ -1,15 +1,15 @@
 # Core ML & Data Processing
-numpy>=1.26.4,<2
+numpy>=1.26.0,<2.0.0
 scipy>=1.14.0
 scikit-learn>=1.5.0
 pandas>=2.0.0
-matplotlib>=3.10.0
+matplotlib>=3.8.0
 numexpr>=2.10.2
 bottleneck>=1.4.2
 
 # Deep Learning & Computer Vision (Transfer Learning)
-tensorflow>=2.20.0
-keras<4
+tensorflow>=2.13.0
+keras>=3.0.0
 opencv-python>=4.8.0
 keras-preprocessing>=1.1.2
 
@@ -18,11 +18,23 @@ albumentations>=1.4.0
 pillow>=10.0.0
 imageio>=2.25.0
 scikit-image>=0.22.0
-Pillow>=10.0.0
 
 # Transfer Learning & Model Training
 tensorflow-hub>=0.15.0
-tensorflow-addons>=0.23.0
+
+# YOLO & Object Detection
+ultralytics>=8.0.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Jupyter & IPython
+ipykernel>=7.0.0
+ipython>=8.0.0
+
+# Visualization & Plotting
+seaborn>=0.13.0
+plotly>=5.17.0
+kaleido>=0.2.1
 
 # Database & ORM
 psycopg2-binary>=2.9.0
@@ -38,3 +50,38 @@ tqdm>=4.66.0
 requests>=2.31.0
 requests-oauthlib>=1.0.0,<2
 python-dotenv>=1.0.0
+wrapt>=1.0.0,<2.0.0
+
+# =============================================================================
+# SETUP RÁPIDO - 2 COMANDOS DOCKER
+# =============================================================================
+# 
+# 1. Copiar requirements para container:
+#    docker cp requirements.txt energy_ai_lab:/home/jovyan/
+#
+# 2. Criar venv, instalar e registrar kernel (uma única vez):
+#    docker exec energy_ai_lab bash -c "cd /home/jovyan && python -m venv yolo_venv && source yolo_venv/bin/activate && pip install --upgrade pip -q && pip install -r requirements.txt -q && python -m ipykernel install --user --name venv-yolo --display-name 'Python 3.11 (venv notebooks)'"
+#
+# 3. Reiniciar:
+#    docker restart energy_ai_lab
+#
+# 4. No Jupyter (http://localhost:8888): 
+#    - Clique no kernel (canto superior direito)
+#    - Selecione "Python 3.11 (venv notebooks)"
+#    - Pronto!
+#
+# =============================================================================
+#
+# 4. Verify kernel is registered:
+#    jupyter kernelspec list
+#
+# 5. In Jupyter, select "Python 3.11 (venv notebooks)" from kernel dropdown
+# =============================================================================
+# 3. Register kernel:
+#    python -m ipykernel install --user --name venv-yolo --display-name "Python 3.11 (venv notebooks)"
+#
+# 4. Verify kernel is registered:
+#    jupyter kernelspec list
+#
+# 5. In Jupyter, select "Python 3.11 (venv notebooks)" from kernel dropdown
+# =============================================================================

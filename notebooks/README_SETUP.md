@@ -1,37 +1,78 @@
 # Notebooks - Machine Learning para Detecção de Painéis Solares
 
-## ⚙️ Setup Inicial
+## ⚙️ Setup - Docker (Comando Único!)
 
-### Instalação de Dependências
+### ⚠️ IMPORTANTE: Execute na pasta `notebooks/`
 
-Antes de executar qualquer notebook, instale as dependências necessárias:
+Abra PowerShell na pasta onde está o `requirements.txt`:
 
-```bash
-pip install -r requirements.txt
+```powershell
+cd C:\Hackathon\Git\energy-netload-monitor\notebooks
 ```
 
-### Resolver Conflitos de Versão
+### Passo 1: COPIAR requirements para o container
 
-Se encontrar erros relacionados a versões de `numpy`, `scipy` ou `sklearn`:
-
-```bash
-# Downgrade NumPy para compatibilidade
-pip install "numpy>=1.26.4,<2"
-
-# Atualizar SciPy para versão compatível
-pip install "scipy>=1.14.0"
-
-# Reinstalar scikit-learn
-pip install --upgrade scikit-learn
+```powershell
+docker cp requirements.txt energy_ai_lab:/home/jovyan/
 ```
 
-### Resetar Kernel do Jupyter
+### Passo 2: Setup automático (cria venv + instala + registra kernel)
 
-Se os erros persistirem após instalar pacotes:
+```powershell
+docker exec energy_ai_lab bash -c "cd /home/jovyan && python -m venv yolo_venv && source yolo_venv/bin/activate && pip install --upgrade pip -q && pip install -r requirements.txt -q && python -m ipykernel install --user --name venv-yolo --display-name 'Python 3.11 (venv notebooks)'"
+```
 
-1. No VS Code, abra a paleta de comandos (`Ctrl+Shift+P`)
-2. Procure por "Jupyter: Restart Kernel"
-3. Execute novamente a célula que gerou erro
+### Passo 3: Reiniciar
+
+```powershell
+docker restart energy_ai_lab
+```
+
+**Pronto!** Agora é só usar.
+
+---
+
+## 🚀 Usar no Jupyter
+
+1. Abra http://localhost:8888
+2. Clique no kernel (canto superior direito)
+3. Selecione **"Python 3.11 (venv notebooks)"**
+4. Execute as células
+
+**Esperado:**
+```
+Python: /home/jovyan/yolo_venv/bin/python
+Versão: 3.11.x
+Ambiente: venv
+```
+
+---
+
+## 🔄 Se Precisar Reinstalar Pacotes
+
+```powershell
+# Certifique-se que requirements.txt foi copiado
+docker cp requirements.txt energy_ai_lab:/home/jovyan/
+
+# Reinstalar no container
+docker exec energy_ai_lab bash -c "source /home/jovyan/yolo_venv/bin/activate && pip install -r requirements.txt --force-reinstall -q"
+
+# Reiniciar
+docker restart energy_ai_lab
+```
+
+---
+
+## ⚠️ Troubleshooting
+
+**Erro: `Could not open requirements file`**
+- Solução: Certifique-se de executar `docker cp requirements.txt energy_ai_lab:/home/jovyan/` ANTES
+
+**Erro: `ModuleNotFoundError: No module named 'cv2'`**
+- Solução: Clique no kernel (canto superior direito) e selecione **"Python 3.11 (venv notebooks)"**, depois reinicie o kernel
+
+**Problema: Kernel não aparece no seletor**
+- Solução: Recarregue a página (Ctrl+F5)
 
 ---
 
@@ -67,17 +108,15 @@ Notebook que baixa uma imagem de satélite, encontra essas áreas "azuis e retan
 
 | Pacote | Versão | Motivo |
 |--------|--------|--------|
-| numpy | >=1.26.4,<2 | Compatibilidade com TensorFlow 2.13+ |
+| numpy | >=1.26.0,<2.0.0 | Compatibilidade com TensorFlow 2.13+ |
 | scipy | >=1.14.0 | Requer NumPy 1.26.4+ |
 | scikit-learn | >=1.5.0 | Compatível com scipy 1.14+ |
 | tensorflow | >=2.13.0 | Deep Learning para Transfer Learning |
+| torch, torchvision | >=2.0.0 | PyTorch para YOLO e modelos avançados |
 | opencv-python | >=4.8.0 | Processamento de imagens e detecção |
+| ultralytics | >=8.0.0 | YOLOv8 para detecção de objetos |
+| pillow | >=10.0.0 | Manipulação de imagens |
 | albumentations | >=1.4.0 | Data augmentation para treinamento |
-
----
-
-## 💡 Dicas
-
-- Sempre instale `requirements.txt` antes de executar novos notebooks
-- Se um kernel não funciona, reinicie-o através do VS Code
-- Para desenvolvimento local, use um ambiente virtual Python isolado
+| jupyter, ipykernel, ipython | >=7.0.0 | Ambiente de notebooks interativos |
+| plotly, seaborn, matplotlib | Latest | Visualização e gráficos |
+| geopandas, rasterio | Latest | Processamento de dados geoespaciais |

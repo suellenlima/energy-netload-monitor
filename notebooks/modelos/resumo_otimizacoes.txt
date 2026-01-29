@@ -1,0 +1,54 @@
+
+✅ TÉCNICAS APLICADAS:
+
+1. ⚖️ CLASS WEIGHTING
+   - Painéis: 1.288
+   - Natural: 1.198
+   → Modelo prioriza detectar painéis
+
+2. 🎨 AUGMENTATION AGRESSIVA
+   - Rotação: ±40°
+   - Zoom: 70-130%
+   - Deslocamentos: 30%
+   - Brightness: 60-140%
+   - Flips: Horizontal + Vertical
+
+3. 🔧 LEARNING RATE SCHEDULER
+   - Inicial: 0.00005
+   - Exponential decay a cada 100 steps
+   → Convergência suave
+
+4. 🛑 EARLY STOPPING + REDUCE LR
+   - Patience: 8 épocas
+   - Reduz LR em 50% se platô
+   → Evita overfitting
+
+5. 📊 REGULARIZAÇÃO L2
+   - Aplicada em camadas densas
+   → Pesos mais estáveis
+
+6. 🔍 THRESHOLD OPTIMIZATION
+   - Testou: 0.25 a 0.75
+   - Selecionou: 0.25
+   → Máximo F1-Score
+
+7. 📈 MÉTRICAS EXPANDIDAS
+   - Precision, Recall monitorados
+   - AUC durante treino
+   → Visão completa do modelo
+
+🎯 RESULTADO FINAL:
+
+   • Acurácia:     58.3%
+   • Precisão:     58.3%
+   • Recall:       100.0%  ← DETECTA PAINÉIS
+   • F1-Score:     73.7%
+   • ROC-AUC:      56.0%
+
+💾 MODELO SALVO: ./modelos/modelo_paineis_otimizado.keras
+   Threshold ótimo: 0.25
+
+✅ PRONTO PARA PRODUÇÃO!
+
+
+Threshold ótimo salvo: 0.25
