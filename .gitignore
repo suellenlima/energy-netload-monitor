@@ -61,3 +61,8 @@ build/
 .claude/settings.json
 .claude/settings.local.json
 nul
+
+
+# Models train
+*.npz
+notebooks/notebooks/data_cache/

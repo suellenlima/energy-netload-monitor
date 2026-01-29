@@ -112,7 +112,9 @@ services:
   # Acessível em http://localhost:8888
   # -------------------------------------------------------------------------
   notebooks:
-    image: jupyter/scipy-notebook:latest
+    build:
+      context: ./notebooks
+      dockerfile: Dockerfile
     container_name: energy_ai_lab
     ports:
       - "8888:8888"
@@ -121,6 +123,7 @@ services:
       - ./data:/home/jovyan/data
     environment:
       - JUPYTER_TOKEN=admin  # Senha para acessar
+      - GRANT_SUDO=yes
     networks:
       - energy_net
       
