@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+
+from ..core.cache import cached
+from ..core.database import get_engine
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_hidden_load(
@@ -40,7 +47,7 @@ def calculate_hidden_load(
 				query, {"sub_simple": sub_simple, "sub_like": sub_like}
 			).fetchall()
 	except Exception as exc:
-		print(f"Erro ao calcular carga oculta: {exc}")
+		logger.error(f"Erro ao calcular carga oculta: {exc}", exc_info=True)
 		return []
 
 	if not result:
@@ -53,7 +60,18 @@ def calculate_hidden_load(
 	return df.to_dict(orient="records")
 
 
-def fetch_classes_consumption(engine: Engine, distribuidora: str | None = None) -> list[dict]:
+def fetch_classes_consumption(engine: Engine | None = None, distribuidora: str | None = None) -> list[dict]:
+	"""
+	Busca consumo por classe.
+	Usa cache de 10 minutos para evitar queries repetidas.
+	"""
+	return _fetch_classes_consumption_cached(distribuidora)
+
+
+@cached(ttl_seconds=600)  # Cache de 10 minutos
+def _fetch_classes_consumption_cached(distribuidora: str | None = None) -> list[dict]:
+	"""Versão cacheada da busca de classes de consumo."""
+	engine = get_engine()
 	filter_clause, params = _build_distrib_filter(distribuidora)
 	query = text(f"""
 		SELECT classe, SUM(potencia_mw) as total_mw
@@ -67,7 +85,7 @@ def fetch_classes_consumption(engine: Engine, distribuidora: str | None = None) 
 		with engine.connect() as conn:
 			result = conn.execute(query, params).fetchall()
 	except Exception as exc:
-		print(f"Erro ao buscar classes de consumo: {exc}")
+		logger.error(f"Erro ao buscar classes de consumo: {exc}", exc_info=True)
 		return []
 
 	return [
@@ -88,7 +106,7 @@ def fetch_fraud_alert(engine: Engine, distribuidora: str | None = None) -> dict:
 		with engine.connect() as conn:
 			result = conn.execute(query, params).fetchone()
 	except Exception as exc:
-		print(f"Erro ao buscar alertas de fraude: {exc}")
+		logger.error(f"Erro ao buscar alertas de fraude: {exc}", exc_info=True)
 		return {}
 
 	if not result:
@@ -105,16 +123,27 @@ def fetch_fraud_alert(engine: Engine, distribuidora: str | None = None) -> dict:
 	}
 
 
-def list_distribuidoras(engine: Engine, subsistema: str | None = None, limit: int = 50) -> list[str]:
+def list_distribuidoras(engine: Engine | None = None, subsistema: str | None = None, limit: int = 50) -> list[str]:
+	"""
+	Lista distribuidoras disponíveis.
+	Usa cache de 10 minutos para evitar queries repetidas.
+	"""
+	return _list_distribuidoras_cached(subsistema, limit)
+
+
+@cached(ttl_seconds=600)  # Cache de 10 minutos
+def _list_distribuidoras_cached(subsistema: str | None = None, limit: int = 50) -> list[str]:
+	"""Versão cacheada da busca de distribuidoras."""
+	engine = get_engine()
 	where_clause = ""
 	params = {"limit": limit}
-	
+
 	if subsistema:
 		where_clause = "WHERE subsistema ILIKE :subsistema"
 		params["subsistema"] = f"%{subsistema}%"
-	
+
 	query = text(f"""
-		SELECT DISTINCT distribuidora 
+		SELECT DISTINCT distribuidora
 		FROM subestacoes_ons
 		{where_clause}
 		ORDER BY distribuidora
@@ -127,7 +156,7 @@ def list_distribuidoras(engine: Engine, subsistema: str | None = None, limit: in
 			names = [row.distribuidora for row in result]
 			return [""] + names
 	except Exception as exc:
-		print(f"Erro ao listar distribuidoras: {exc}")
+		logger.error(f"Erro ao listar distribuidoras: {exc}", exc_info=True)
 		return ["", "COPEL-GT", "CEMIG GT", "CPFL PAULISTA"]
 
 
@@ -154,3 +183,69 @@ def _corrigir_sol(row: pd.Series) -> float:
 	if 6 <= hora <= 18 and row["sol_wm2"] < 10:
 		return np.sin(np.pi * (hora - 6) / 12) * 800
 	return row["sol_wm2"]
+
+
+def fetch_establishment_counts(engine: Engine, distribuidora: str | None = None) -> list[dict]:
+	"""Retorna contagem de estabelecimentos por tipo."""
+	filter_clause, params = _build_distrib_filter(distribuidora)
+
+	query = text(f"""
+		SELECT
+			tipo_estabelecimento as tipo,
+			COUNT(*) as quantidade,
+			SUM(qtd_unidades) as total_unidades,
+			SUM(potencia_kw) / 1000 as total_mw
+		FROM gd_granular
+		{filter_clause}
+		GROUP BY tipo_estabelecimento
+		ORDER BY quantidade DESC
+	""")
+
+	try:
+		with engine.connect() as conn:
+			result = conn.execute(query, params).fetchall()
+	except Exception as exc:
+		logger.error(f"Erro ao buscar contagens: {exc}", exc_info=True)
+		return []
+
+	return [
+		{
+			"tipo": row.tipo,
+			"quantidade": int(row.quantidade or 0),
+			"total_unidades": int(row.total_unidades or 0),
+			"total_mw": round(row.total_mw or 0, 2)
+		}
+		for row in result
+	]
+
+
+def fetch_granular_summary(engine: Engine, distribuidora: str | None = None) -> dict:
+	"""Retorna resumo geral dos dados granulares."""
+	filter_clause, params = _build_distrib_filter(distribuidora)
+
+	query = text(f"""
+		SELECT
+			COUNT(*) as total_instalacoes,
+			SUM(qtd_unidades) as total_unidades,
+			SUM(potencia_kw) / 1000 as total_mw
+		FROM gd_granular
+		{filter_clause}
+	""")
+
+	try:
+		with engine.connect() as conn:
+			result = conn.execute(query, params).fetchone()
+			counts = fetch_establishment_counts(engine, distribuidora)
+	except Exception as exc:
+		logger.error(f"Erro ao buscar resumo: {exc}", exc_info=True)
+		return {}
+
+	if not result:
+		return {}
+
+	return {
+		"total_instalacoes": int(result.total_instalacoes or 0),
+		"total_unidades_consumidoras": int(result.total_unidades or 0),
+		"total_mw": round(result.total_mw or 0, 2),
+		"por_tipo": {item["tipo"]: item for item in counts}
+	}

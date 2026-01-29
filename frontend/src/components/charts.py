@@ -51,7 +51,7 @@ def render_carga_section(
     hora_pico = df_carga.loc[df_carga["estimativa_solar_mw"].idxmax(), "hora"].strftime("%Hh")
 
     col1.metric("Carga Rede (ONS)", f"{carga_atual:,.0f} MW")
-    col2.metric("GD Distribuída (Agora)", f"{oculta_oficial:,.0f} MW", delta="Oficial")
+    col2.metric("MMGD Distribuída (Agora)", f"{oculta_oficial:,.0f} MW", delta="Oficial")
 
     if impacto_projecao_mw > 0:
         col3.metric(
@@ -125,7 +125,7 @@ def render_classes_consumo(client: ApiClient, distribuidora: str) -> None:
         return
 
     st.markdown("---")
-    st.header("Detalhamento da Concessão")
+    st.header("Detalhamento da Distribuidora")
     c1, c2 = st.columns([1, 2])
     with c1:
         st.dataframe(df_classes, use_container_width=True, hide_index=True)
@@ -133,3 +133,75 @@ def render_classes_consumo(client: ApiClient, distribuidora: str) -> None:
         fig_pie = px.pie(df_classes, values="mw", names="classe", hole=0.4, title="Perfil de Consumo")
         fig_pie.update_layout(template="plotly_dark")
         st.plotly_chart(fig_pie, use_container_width=True)
+
+
+def render_estabelecimentos_section(client: ApiClient, distribuidora: str) -> None:
+    """Renderiza análise de estabelecimentos por tipo."""
+    st.header("Análise de Estabelecimentos por Tipo")
+
+    result_resumo = client.get("/analise/estabelecimentos/resumo", params={"distribuidora": distribuidora})
+    result_contagem = client.get("/analise/estabelecimentos/contagem", params={"distribuidora": distribuidora})
+
+    if result_resumo.error or result_contagem.error:
+        show_error(result_resumo.error or result_contagem.error)
+        return
+
+    if not result_resumo.data or not result_contagem.data:
+        st.info("Sem dados de estabelecimentos disponíveis.")
+        return
+
+    resumo = result_resumo.data
+    contagens = result_contagem.data
+
+    # Métricas principais
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Instalações MMGD", f"{resumo['total_instalacoes']:,}")
+    col2.metric("Unidades Consumidoras (UC)", f"{resumo['total_unidades_consumidoras']:,}")
+    col3.metric("Potência Total", f"{resumo['total_mw']:,.0f} MW")
+    col4.metric("Média por UC", f"{resumo['total_mw'] / resumo['total_unidades_consumidoras'] * 1000:.1f} kW")
+
+    df_contagens = pd.DataFrame(contagens)
+
+    # Mapear labels
+    tipo_labels = {
+        "residencia": "Residências",
+        "predio_residencial": "Prédios Residenciais",
+        "comercio": "Comércios",
+        "predio_comercial": "Prédios Comerciais",
+        "industria": "Indústrias",
+        "outro": "Outros"
+    }
+    df_contagens["tipo_label"] = df_contagens["tipo"].map(tipo_labels)
+
+    # Gráficos lado a lado
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        st.subheader("Distribuição por Quantidade")
+        fig_qty = px.pie(
+            df_contagens,
+            values="quantidade",
+            names="tipo_label",
+            title="Número de Instalações",
+            hole=0.4
+        )
+        fig_qty.update_layout(template="plotly_dark")
+        st.plotly_chart(fig_qty, use_container_width=True)
+
+    with col_right:
+        st.subheader("Distribuição por Potência")
+        fig_mw = px.pie(
+            df_contagens,
+            values="total_mw",
+            names="tipo_label",
+            title="Capacidade Instalada (%)",
+            hole=0.4
+        )
+        fig_mw.update_layout(template="plotly_dark")
+        st.plotly_chart(fig_mw, use_container_width=True)
+
+    # Tabela detalhada
+    st.subheader("Tabela Detalhada")
+    df_display = df_contagens[["tipo_label", "quantidade", "total_unidades", "total_mw"]].copy()
+    df_display.columns = ["Tipo", "Instalações", "Unidades Consumidoras (UC)", "Potência (MW)"]
+    st.dataframe(df_display, use_container_width=True, hide_index=True)

@@ -3,293 +3,267 @@ Endpoints para gerenciar e consultar dados de subestações.
 Fornece API para subestações públicas (ONS) e detectadas (clustering).
 """
 
-from fastapi import APIRouter, HTTPException
+import logging
+import uuid
 
-from ..core.database import get_engine
-from ..services.subestacoes_clustering import detect_subestacoes_by_clustering, load_detected_subestacoes
+from fastapi import APIRouter, BackgroundTasks, Query
 
-router = APIRouter(prefix="/subestacoes")
+from ..core import DatabaseError, get_engine
+from ..schemas import (
+    AtualizarDetectadasResponse,
+    SubestacaoDetectadaResponse,
+    SubestacaoONSResponse,
+    SubestacaoResumo,
+    TaskAsyncResponse,
+)
+from ..services.subestacoes_clustering import (
+    detect_subestacoes_by_clustering,
+    load_detected_subestacoes,
+)
+from .deps import (
+    DistribuidoraQuery,
+    EngineDepends,
+    LimiteQuery,
+    SubestacaoRepoDepends,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/subestacoes", tags=["Subestações"])
 
 
-@router.get("/ons")
-def get_subestacoes_ons(distribuidora: str | None = None, limite: int = 100):
+@router.get("/ons", response_model=list[SubestacaoONSResponse])
+def get_subestacoes_ons(
+    repo: SubestacaoRepoDepends,
+    distribuidora: DistribuidoraQuery = None,
+    limite: LimiteQuery = 100,
+):
     """
     Lista subestações do ONS (dados públicos oficiais).
-    
-    Parâmetros:
-    - distribuidora: Filtrar por distribuidora (opcional)
-    - limite: Máximo de registros (default 100)
+
+    - **distribuidora**: Filtrar por distribuidora (opcional)
+    - **limite**: Máximo de registros (default 100)
     """
     try:
-        import pandas as pd
-        from sqlalchemy import text
-        import logging
-        
-        logger = logging.getLogger("api.subestacoes")
-        engine = get_engine()
-        
-        where_clause = ""
-        params = {"limite": limite}
-        
-        if distribuidora:
-            where_clause = "WHERE distribuidora ILIKE :dist"
-            params["dist"] = f"%{distribuidora}%"
-        
-        query_str = f"""
-            SELECT id_estacao as id, nome, sigla_se, tensao_kv, subsistema, distribuidora,
-                   latitude, longitude, fonte_dados
-            FROM subestacoes_ons
-            {where_clause}
-            ORDER BY tensao_kv DESC, nome
-            LIMIT :limite
-        """
-        
-        logger.debug(f"Query: {query_str}, Params: {params}")
-        
-        df = pd.read_sql(text(query_str), engine, params=params)
-        
-        logger.info(f"Retornadas {len(df)} subestações ONS")
-        return df.to_dict(orient="records")
-    
+        return repo.get_ons(distribuidora, limite)
     except Exception as exc:
-        import logging
-        logger = logging.getLogger("api.subestacoes")
         logger.error(f"Erro ao buscar subestações ONS: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar subestações ONS: {str(exc)}")
+        raise DatabaseError("Falha ao buscar subestações ONS") from exc
 
 
-@router.get("/detectadas")
-def get_subestacoes_detectadas(distribuidora: str | None = None, limite: int = 100):
+@router.get("/detectadas", response_model=list[SubestacaoDetectadaResponse])
+def get_subestacoes_detectadas(
+    repo: SubestacaoRepoDepends,
+    distribuidora: DistribuidoraQuery = None,
+    limite: LimiteQuery = 100,
+):
     """
     Lista subestações detectadas automaticamente via clustering de GD.
-    
-    Parâmetros:
-    - distribuidora: Filtrar por distribuidora (opcional)
-    - limite: Máximo de registros (default 100)
+
+    - **distribuidora**: Filtrar por distribuidora (opcional)
+    - **limite**: Máximo de registros (default 100)
     """
     try:
-        import pandas as pd
-        from sqlalchemy import text, inspect
-        import logging
-        
-        logger = logging.getLogger("api.subestacoes")
-        engine = get_engine()
-        
-        # Verificar se tabela existe
-        insp = inspect(engine)
-        if "subestacoes_detectadas" not in insp.get_table_names():
-            logger.info("Tabela subestacoes_detectadas não existe ainda")
-            return []
-        
-        where_clause = ""
-        params = {"limite": limite}
-        
-        if distribuidora:
-            where_clause = "WHERE distribuidora ILIKE :dist"
-            params["dist"] = f"%{distribuidora}%"
-        
-        query_str = f"""
-            SELECT id, cluster_id, nome, latitude, longitude, distribuidora,
-                   subsistema, quantidade_gd, potencia_total_mw, raio_deteccao_km,
-                   data_deteccao
-            FROM subestacoes_detectadas
-            {where_clause}
-            ORDER BY potencia_total_mw DESC
-            LIMIT :limite
-        """
-        
-        df = pd.read_sql(text(query_str), engine, params=params)
-        
-        logger.info(f"Retornadas {len(df)} subestações detectadas")
-        return df.to_dict(orient="records") if not df.empty else []
-    
+        return repo.get_detectadas(distribuidora, limite)
     except Exception as exc:
-        import logging
-        logger = logging.getLogger("api.subestacoes")
         logger.error(f"Erro ao buscar subestações detectadas: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar subestações detectadas: {str(exc)}")
+        raise DatabaseError("Falha ao buscar subestações detectadas") from exc
 
 
-@router.post("/detectadas/atualizar")
-def atualizar_subestacoes_detectadas(distribuidora: str | None = None, eps_km: float = 5.0):
+@router.post("/detectadas/atualizar", response_model=AtualizarDetectadasResponse)
+def atualizar_subestacoes_detectadas(
+    engine: EngineDepends,
+    distribuidora: DistribuidoraQuery = None,
+    eps_km: float = Query(default=5.0, ge=0.5, le=50.0, description="Raio de busca em km"),
+):
     """
-    Executa detecção de subestações via clustering e armazena resultados.
-    
-    Parâmetros:
-    - distribuidora: Processar apenas uma distribuidora (opcional)
-    - eps_km: Raio de busca em km para clustering (default 5 km)
+    Executa detecção de subestações via clustering e armazena resultados (síncrono).
+
+    - **distribuidora**: Processar apenas uma distribuidora (opcional)
+    - **eps_km**: Raio de busca em km para clustering (default 5 km)
     """
     try:
-        import logging
-        
-        engine = get_engine()
-        logger = logging.getLogger("api.subestacoes")
-        
-        # Executar clustering
         df_detectadas = detect_subestacoes_by_clustering(
             engine,
             distribuidora=distribuidora,
             eps_km=eps_km,
-            logger=logger
+            logger=logger,
         )
-        
+
         if df_detectadas.empty:
-            return {
-                "status": "sucesso",
-                "mensagem": "Nenhuma subestação detectada",
-                "quantidade": 0
-            }
-        
-        # Carregar no banco
+            return AtualizarDetectadasResponse(
+                status="sucesso",
+                mensagem="Nenhuma subestação detectada",
+                quantidade=0,
+            )
+
         quantidade = load_detected_subestacoes(df_detectadas, engine, logger)
-        
-        return {
-            "status": "sucesso",
-            "mensagem": f"Detectadas e armazenadas {quantidade} subestações",
-            "quantidade": quantidade,
-            "raio_km": eps_km
-        }
-    
+
+        return AtualizarDetectadasResponse(
+            status="sucesso",
+            mensagem=f"Detectadas e armazenadas {quantidade} subestações",
+            quantidade=quantidade,
+            raio_km=eps_km,
+        )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Erro ao atualizar subestações: {exc}")
+        logger.error(f"Erro ao atualizar subestações: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao executar clustering") from exc
+
+
+def _run_clustering_background(
+    task_id: str,
+    distribuidora: str | None,
+    eps_km: float,
+) -> None:
+    """
+    Executa clustering em background.
+
+    Args:
+        task_id: ID da tarefa para logging
+        distribuidora: Filtrar por distribuidora (opcional)
+        eps_km: Raio de busca em km
+    """
+    logger.info(f"[Task {task_id}] Iniciando clustering em background")
+    try:
+        engine = get_engine()
+        df_detectadas = detect_subestacoes_by_clustering(
+            engine,
+            distribuidora=distribuidora,
+            eps_km=eps_km,
+            logger=logger,
+        )
+
+        if df_detectadas.empty:
+            logger.info(f"[Task {task_id}] Nenhuma subestação detectada")
+            return
+
+        quantidade = load_detected_subestacoes(df_detectadas, engine, logger)
+        logger.info(f"[Task {task_id}] Concluído: {quantidade} subestações detectadas")
+
+    except Exception as exc:
+        logger.error(f"[Task {task_id}] Erro no clustering: {exc}", exc_info=True)
+
+
+@router.post("/detectadas/atualizar-async", response_model=TaskAsyncResponse)
+def atualizar_subestacoes_async(
+    background_tasks: BackgroundTasks,
+    distribuidora: DistribuidoraQuery = None,
+    eps_km: float = Query(default=5.0, ge=0.5, le=50.0, description="Raio de busca em km"),
+):
+    """
+    Inicia detecção de subestações em background (assíncrono).
+
+    Retorna imediatamente com um task_id para acompanhamento.
+    O processamento continua em background.
+
+    - **distribuidora**: Processar apenas uma distribuidora (opcional)
+    - **eps_km**: Raio de busca em km para clustering (default 5 km)
+    """
+    task_id = str(uuid.uuid4())[:8]
+
+    background_tasks.add_task(
+        _run_clustering_background,
+        task_id=task_id,
+        distribuidora=distribuidora,
+        eps_km=eps_km,
+    )
+
+    logger.info(f"[Task {task_id}] Tarefa de clustering agendada")
+
+    return TaskAsyncResponse(
+        status="iniciado",
+        task_id=task_id,
+        mensagem="Processamento iniciado em background. Consulte /detectadas para ver os resultados.",
+    )
+
+
+def _df_to_geojson_features(df, property_mapping: dict, tipo: str) -> list[dict]:
+    """
+    Converte DataFrame em features GeoJSON de forma vetorizada.
+    Muito mais eficiente que iterrows().
+    """
+    if df.empty:
+        return []
+
+    features = []
+    records = df.to_dict(orient="records")
+
+    for row in records:
+        properties = {
+            prop_name: row.get(col_name)
+            for prop_name, col_name in property_mapping.items()
+        }
+        properties["tipo"] = tipo
+
+        features.append({
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [row["longitude"], row["latitude"]]
+            },
+            "properties": properties
+        })
+
+    return features
 
 
 @router.get("/geo")
-def get_subestacoes_geojson(origem: str = "ambas", limite: int = 100):
+def get_subestacoes_geojson(
+    repo: SubestacaoRepoDepends,
+    origem: str = Query(default="ambas", description="ons, detectadas ou ambas"),
+    limite: LimiteQuery = 100,
+):
     """
     Retorna subestações em formato GeoJSON.
-    
-    Parâmetros:
-    - origem: "ons", "detectadas" ou "ambas" (default)
-    - limite: Máximo de registros por origem
+
+    - **origem**: "ons", "detectadas" ou "ambas" (default)
+    - **limite**: Máximo de registros por origem
     """
     try:
-        engine = get_engine()
         features = []
-        
-        from sqlalchemy import text
-        
-        # Buscar subestações ONS
+
         if origem in ["ons", "ambas"]:
-            import pandas as pd
-            
-            query_ons = text("""
-                SELECT id_estacao as id, nome, sigla_se, tensao_kv, subsistema, distribuidora,
-                       latitude, longitude, 'ONS' as origem
-                FROM subestacoes_ons
-                LIMIT :limite
-            """)
-            df_ons = pd.read_sql(query_ons, engine, params={"limite": limite})
-            
-            for _, row_data in df_ons.iterrows():
-                row_dict = row_data.to_dict()
-                features.append({
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [row_dict["longitude"], row_dict["latitude"]]
-                    },
-                    "properties": {
-                        "id": row_dict["id"],
-                        "nome": row_dict["nome"],
-                        "sigla": row_dict["sigla_se"],
-                        "tensao_kv": row_dict["tensao_kv"],
-                        "subsistema": row_dict["subsistema"],
-                        "distribuidora": row_dict["distribuidora"],
-                        "origem": row_dict["origem"],
-                        "tipo": "subestacao_ons"
-                    }
-                })
-        
-        # Buscar subestações detectadas
+            df_ons = repo.get_ons_for_geojson(limite)
+            ons_mapping = {
+                "id": "id",
+                "nome": "nome",
+                "sigla": "sigla_se",
+                "tensao_kv": "tensao_kv",
+                "subsistema": "subsistema",
+                "distribuidora": "distribuidora",
+                "origem": "origem",
+            }
+            features.extend(_df_to_geojson_features(df_ons, ons_mapping, "subestacao_ons"))
+
         if origem in ["detectadas", "ambas"]:
-            import pandas as pd
-            from sqlalchemy import inspect
-            
-            # Verificar se tabela existe
-            insp = inspect(engine)
-            if "subestacoes_detectadas" in insp.get_table_names():
-                query_det = text("""
-                    SELECT id, cluster_id, nome, latitude, longitude, distribuidora,
-                           subsistema, quantidade_gd, potencia_total_mw
-                    FROM subestacoes_detectadas
-                    LIMIT :limite
-                """)
-                df_det = pd.read_sql(query_det, engine, params={"limite": limite})
-                
-                for _, row_data in df_det.iterrows():
-                    row_dict = row_data.to_dict()
-                    features.append({
-                        "type": "Feature",
-                        "geometry": {
-                            "type": "Point",
-                            "coordinates": [row_dict["longitude"], row_dict["latitude"]]
-                        },
-                        "properties": {
-                            "id": row_dict["id"],
-                            "nome": row_dict["nome"],
-                            "cluster_id": row_dict["cluster_id"],
-                            "distribuidora": row_dict["distribuidora"],
-                            "subsistema": row_dict["subsistema"],
-                            "quantidade_gd": row_dict["quantidade_gd"],
-                        "potencia_total_mw": row_dict["potencia_total_mw"],
-                        "origem": "DETECTADA",
-                        "tipo": "subestacao_detectada"
-                    }
-                })
-        
+            df_det = repo.get_detectadas_for_geojson(limite)
+            if not df_det.empty:
+                det_mapping = {
+                    "id": "id",
+                    "nome": "nome",
+                    "cluster_id": "cluster_id",
+                    "distribuidora": "distribuidora",
+                    "subsistema": "subsistema",
+                    "quantidade_gd": "quantidade_gd",
+                    "potencia_total_mw": "potencia_total_mw",
+                    "origem": "origem",
+                }
+                features.extend(_df_to_geojson_features(df_det, det_mapping, "subestacao_detectada"))
+
         return {
             "type": "FeatureCollection",
             "features": features
         }
-    
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Erro ao gerar GeoJSON: {exc}")
+        logger.error(f"Erro ao gerar GeoJSON: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao gerar GeoJSON") from exc
 
 
-@router.get("/resumo")
-def get_subestacoes_resumo():
-    """
-    Retorna resumo de subestações por distribuidora e origem.
-    """
+@router.get("/resumo", response_model=list[SubestacaoResumo])
+def get_subestacoes_resumo(repo: SubestacaoRepoDepends):
+    """Retorna resumo de subestações por distribuidora e origem."""
     try:
-        import pandas as pd
-        from sqlalchemy import text, inspect
-        
-        engine = get_engine()
-        insp = inspect(engine)
-        
-        # Se tabela detectadas não existe, retornar só ONS
-        if "subestacoes_detectadas" not in insp.get_table_names():
-            query = text("""
-                SELECT 
-                    distribuidora,
-                    COUNT(*) as total_ons,
-                    0 as total_detectadas,
-                    COUNT(*) as total
-                FROM subestacoes_ons
-                GROUP BY distribuidora
-                ORDER BY total DESC
-            """)
-        else:
-            query = text("""
-                SELECT 
-                    distribuidora,
-                    COUNT(CASE WHEN origem = 'ons' THEN 1 END) as total_ons,
-                    COUNT(CASE WHEN origem = 'detectada' THEN 1 END) as total_detectadas,
-                    COUNT(*) as total
-                FROM (
-                    SELECT distribuidora, 'ons' as origem FROM subestacoes_ons
-                    UNION ALL
-                    SELECT distribuidora, 'detectada' as origem FROM subestacoes_detectadas
-                ) t
-                GROUP BY distribuidora
-                ORDER BY total DESC
-            """)
-        
-        df = pd.read_sql(query, engine)
-        
-        return df.to_dict(orient="records") if not df.empty else []
-    
+        return repo.get_resumo()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Erro ao gerar resumo: {exc}")
+        logger.error(f"Erro ao gerar resumo: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao gerar resumo") from exc

@@ -1,28 +1,106 @@
+"""Endpoints para análise de carga e fraude."""
+
+import logging
+
 from fastapi import APIRouter
 
-from ..core.database import get_engine
-from ..services.load_calc import (
-    calculate_hidden_load,
-    fetch_classes_consumption,
-    fetch_fraud_alert,
+from ..core import DatabaseError
+from ..schemas import (
+    AlertaFraude,
+    CargaOcultaItem,
+    ClasseConsumoItem,
+    EstabelecimentoContagem,
+    ResumoGranular,
 )
+from .deps import AnaliseRepoDepends, DistribuidoraQuery, SubsistemaQuery
 
-router = APIRouter(prefix="/analise")
+logger = logging.getLogger(__name__)
 
-
-@router.get("/carga-oculta")
-def calcular_carga_oculta(subsistema: str = "SUDESTE", distribuidora: str | None = None):
-    engine = get_engine()
-    return calculate_hidden_load(engine, subsistema, distribuidora)
+router = APIRouter(prefix="/analise", tags=["Análise"])
 
 
-@router.get("/classes-consumo")
-def get_classes_consumo(distribuidora: str | None = None):
-    engine = get_engine()
-    return fetch_classes_consumption(engine, distribuidora)
+@router.get("/carga-oculta", response_model=list[CargaOcultaItem])
+def calcular_carga_oculta(
+    repo: AnaliseRepoDepends,
+    subsistema: SubsistemaQuery = "SUDESTE",
+    distribuidora: DistribuidoraQuery = None,
+):
+    """
+    Calcula carga oculta estimada (geração solar não medida).
+
+    - **subsistema**: Subsistema elétrico (SUDESTE, NORTE, NORDESTE, SUL)
+    - **distribuidora**: Filtrar por distribuidora (opcional)
+    """
+    try:
+        return repo.get_carga_oculta(subsistema, distribuidora)
+    except Exception as exc:
+        logger.error(f"Erro ao calcular carga oculta: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao calcular carga oculta") from exc
 
 
-@router.get("/alertas-fraude")
-def get_alertas_fraude(distribuidora: str | None = None):
-    engine = get_engine()
-    return fetch_fraud_alert(engine, distribuidora)
+@router.get("/classes-consumo", response_model=list[ClasseConsumoItem])
+def get_classes_consumo(
+    repo: AnaliseRepoDepends,
+    distribuidora: DistribuidoraQuery = None,
+):
+    """
+    Retorna consumo por classe de consumidor.
+
+    - **distribuidora**: Filtrar por distribuidora (opcional)
+    """
+    try:
+        return repo.get_classes_consumo(distribuidora)
+    except Exception as exc:
+        logger.error(f"Erro ao buscar classes de consumo: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao buscar classes de consumo") from exc
+
+
+@router.get("/alertas-fraude", response_model=AlertaFraude | dict)
+def get_alertas_fraude(
+    repo: AnaliseRepoDepends,
+    distribuidora: DistribuidoraQuery = None,
+):
+    """
+    Retorna último alerta de fraude detectado.
+
+    - **distribuidora**: Filtrar por distribuidora (opcional)
+    """
+    try:
+        return repo.get_alerta_fraude(distribuidora)
+    except Exception as exc:
+        logger.error(f"Erro ao buscar alertas de fraude: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao buscar alertas de fraude") from exc
+
+
+@router.get("/estabelecimentos/contagem", response_model=list[EstabelecimentoContagem])
+def get_contagem_estabelecimentos(
+    repo: AnaliseRepoDepends,
+    distribuidora: DistribuidoraQuery = None,
+):
+    """
+    Retorna contagem de estabelecimentos por tipo.
+
+    - **distribuidora**: Filtrar por distribuidora (opcional)
+    """
+    try:
+        return repo.get_contagem_estabelecimentos(distribuidora)
+    except Exception as exc:
+        logger.error(f"Erro ao buscar contagem: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao buscar contagem de estabelecimentos") from exc
+
+
+@router.get("/estabelecimentos/resumo", response_model=ResumoGranular | dict)
+def get_resumo_estabelecimentos(
+    repo: AnaliseRepoDepends,
+    distribuidora: DistribuidoraQuery = None,
+):
+    """
+    Retorna resumo geral dos dados granulares.
+
+    - **distribuidora**: Filtrar por distribuidora (opcional)
+    """
+    try:
+        return repo.get_resumo_granular(distribuidora)
+    except Exception as exc:
+        logger.error(f"Erro ao buscar resumo: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao buscar resumo de estabelecimentos") from exc
