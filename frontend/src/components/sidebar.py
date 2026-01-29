@@ -35,7 +35,7 @@ def render_sidebar(client: ApiClient) -> SidebarState:
 
     st.sidebar.subheader("Análise por Distribuidora")
     opcoes_distribuidoras = _load_distribuidoras(client, subsistema)
-    distribuidora = st.sidebar.selectbox("Concessão (GD):", opcoes_distribuidoras)
+    distribuidora = st.sidebar.selectbox("Distribuidora:", opcoes_distribuidoras)
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("Cruzamento com IA")

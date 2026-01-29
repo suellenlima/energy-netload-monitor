@@ -82,3 +82,34 @@ CREATE INDEX IF NOT EXISTS idx_subestacoes_detectadas_cluster ON subestacoes_det
 
 SELECT create_hypertable('carga_ons', 'time', if_not_exists => TRUE);
 SELECT create_hypertable('clima_real', 'time', if_not_exists => TRUE);
+
+-- ENUM para tipos de estabelecimento
+CREATE TYPE tipo_estabelecimento AS ENUM (
+    'residencia',
+    'predio_residencial',
+    'comercio',
+    'predio_comercial',
+    'industria',
+    'outro'
+);
+
+-- Tabela granular com dados detalhados para contabilização de unidades
+CREATE TABLE IF NOT EXISTS gd_granular (
+    id BIGSERIAL PRIMARY KEY,
+    distribuidora TEXT NOT NULL,
+    classe_consumo TEXT NOT NULL,
+    tipo_consumidor TEXT,
+    subgrupo_tarifario TEXT,
+    qtd_unidades INTEGER NOT NULL DEFAULT 1,
+    sigla_uf TEXT NOT NULL,
+    fonte_geracao TEXT NOT NULL,
+    potencia_kw DOUBLE PRECISION NOT NULL,
+    tipo_estabelecimento tipo_estabelecimento NOT NULL,
+    data_carga TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Índices para performance
+CREATE INDEX IF NOT EXISTS idx_gd_granular_distribuidora ON gd_granular (distribuidora);
+CREATE INDEX IF NOT EXISTS idx_gd_granular_tipo_estab ON gd_granular (tipo_estabelecimento);
+CREATE INDEX IF NOT EXISTS idx_gd_granular_composite ON gd_granular (distribuidora, tipo_estabelecimento);
+CREATE INDEX IF NOT EXISTS idx_gd_granular_uf ON gd_granular (sigla_uf);
