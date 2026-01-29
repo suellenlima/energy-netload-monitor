@@ -58,3 +58,6 @@ build/
 .env
 .env.*
 !.env.example
+.claude/settings.json
+.claude/settings.local.json
+nul
