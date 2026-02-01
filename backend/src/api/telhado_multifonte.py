@@ -6,13 +6,10 @@ Prioridade: Google Maps → CBERS-4A
 """
 
 import logging
-import time
-import os
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from sqlalchemy import text
 from ..core.database import get_engine
 from ..services.google_maps_quota_service import GoogleMapsQuotaService
 
@@ -392,45 +389,6 @@ async def detectar_telhados_multifonte(
         raise
     except Exception as e:
         logger.error(f"Erro crítico na detecção multi-fonte: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/quota-mes")
-async def obter_quota_mes():
-    """Obtém informações de quota de Google Maps do mês atual"""
-    try:
-        engine = get_engine()
-        quota_service = GoogleMapsQuotaService(engine)
-        
-        resultado = quota_service.obter_quota_mes()
-        
-        return {
-            "sucesso": True,
-            "quota": resultado
-        }
-    
-    except Exception as e:
-        logger.error(f"Erro ao obter quota do mês: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/requisicoes-transformador/{transformador_id}")
-async def obter_requisicoes_transformador(transformador_id: int):
-    """Obtém histórico de requisições de um transformador"""
-    try:
-        engine = get_engine()
-        quota_service = GoogleMapsQuotaService(engine)
-        
-        resultado = quota_service.obter_requisicoes_transformador(transformador_id)
-        
-        return {
-            "sucesso": True,
-            "transformador_id": transformador_id,
-            "requisicoes": resultado
-        }
-    
-    except Exception as e:
-        logger.error(f"Erro ao obter requisições: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

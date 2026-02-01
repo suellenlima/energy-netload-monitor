@@ -3,13 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api import telhado
 from .api import telhado_multifonte
-from .api import paineis_solares
 from .api import transformador_pipeline
 from .api.analise import router as analise_router
 from .api.auxiliar import router as auxiliar_router
 from .api.health import router as health_router
 from .api.satelite import router as satelite_router
-from .api.satelite_v2 import router as satelite_v2_router
 from .api.subestacoes import router as subestacoes_router
 from .api.usinas import router as usinas_router
 from .core import (
@@ -53,8 +51,6 @@ app.include_router(analise_router)
 app.include_router(auxiliar_router)
 app.include_router(subestacoes_router)
 app.include_router(satelite_router)
-app.include_router(satelite_v2_router)
 app.include_router(telhado.router)
 app.include_router(telhado_multifonte.router)
-app.include_router(paineis_solares.router)
 app.include_router(transformador_pipeline.router)

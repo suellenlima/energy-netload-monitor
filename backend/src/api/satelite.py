@@ -9,15 +9,14 @@ MUDANÇA IMPORTANTE: Agora usa CBERS-4A do INPE como fonte principal!
 """
 
 import logging
-import os
-from typing import Optional, Annotated
-from datetime import datetime, timedelta
+from typing import Optional, List, Dict
+from datetime import datetime
 
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query, HTTPException, Path
+from pydantic import BaseModel
 
-from ..core import DatabaseError, get_engine
+from ..core import DatabaseError
 from ..schemas import (
-    BoundingBoxModel,
     ConsultaSateliteRequest,
     DadosSatelliteSubestacao,
     ListaImagensSatelite,
@@ -25,13 +24,14 @@ from ..schemas import (
     RegistrarImagemResponse,
 )
 from ..services.inpe_satellite_service import INPESatelliteService
-from ..services.cbers_service import CBERSService, ImagemCBERS
+from ..services.cbers_service import CBERSService
+from ..services.satellite_service_v2 import SatelliteServiceV2
+from ..services.inpe_service_v2 import INPEServiceV2
+from ..services.google_maps_service_v2 import GoogleMapsServiceV2
 from .deps import EngineDepends, LimiteQuery
 
 # Import STAC dependencies com tratamento de erro
 try:
-    from pystac_client import Client
-    import planetary_computer
     HAS_STAC = True
 except ImportError:
     HAS_STAC = False
@@ -42,6 +42,95 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/satelite", tags=["Satélite"])
 
+class FonteDecisaoResponse(BaseModel):
+    """Resposta de decisão de fonte para satélite"""
+    fonte: str
+    pode_usar: bool
+    motivo: str
+    resolucao_metros: float
+    cobertura: str
+    quota_disponivel: Optional[int] = None
+    percentual_uso: Optional[float] = None
+
+
+class ImagemSateliteResponse(BaseModel):
+    """Resposta com imagem de satélite"""
+    id: str
+    data: str
+    cobertura_nuvem_percent: float
+    resolucao_metros: float
+    sensor: str
+    fonte: str = "CBERS-4A"  # CBERS-4A ou GOOGLE_MAPS
+    tipo: Optional[str] = None  # Para Google Maps: satellite, hybrid
+    url: Optional[str] = None  # URL direta da imagem (Google Maps)
+    banda_pan: Optional[str] = None
+    banda_red: Optional[str] = None
+    banda_green: Optional[str] = None
+    banda_blue: Optional[str] = None
+
+
+class BuscaTransformadorResponse(BaseModel):
+    """Resposta de busca por transformador"""
+    fonte: str
+    transformador_id: int
+    imagens_encontradas: int
+    imagens: List[ImagemSateliteResponse]
+    imagens_google_maps: Optional[List[ImagemSateliteResponse]] = []  # Imagens do Google Maps
+    bbox: tuple
+    area_poligonal_km: float
+    periodo: str
+    resolucao_metros: float
+    status: str
+
+
+class ImagemSalvaResponse(BaseModel):
+    """Resposta com imagem salva no banco"""
+    id: int
+    imagem_id: str
+    url_download: Optional[str] = None
+    data_imagem: Optional[str] = None
+    cobertura_nuvem_percentual: Optional[float] = None
+    resolucao_metros: Optional[float] = None
+    status: str
+    data_requisicao: str
+
+
+class ListarImagensTransformadorResponse(BaseModel):
+    """Resposta com lista de imagens do transformador"""
+    transformador_id: int
+    total_requisicoes: int
+    total_sucesso: int
+    imagens: List[ImagemSalvaResponse]
+
+
+class QuotaGoogleMapsResponse(BaseModel):
+    """Resposta com quota Google Maps"""
+    pode_usar: bool
+    usada: int
+    disponivel: int
+    percentual_uso: float
+    limite: int
+    mes: str
+
+
+class RegistrarImagemTransformadorRequest(BaseModel):
+    """Request para registrar imagem de transformador"""
+    transformador_id: int
+    subestacao_id: int
+    data_aquisicao: str
+    resolucao_m: float = 2.0
+    cobertura_nuvem_pct: float
+    urls_bandas: Optional[Dict[str, str]] = None  # {blue, green, red, nir, swir} - opcional para CBERS-4A
+    url_google_maps_satellite: Optional[str] = None  # URL da imagem satellite do Google Maps
+    url_google_maps_hybrid: Optional[str] = None  # URL da imagem hybrid do Google Maps
+
+
+class RegistrarImagemTransformadorResponse(BaseModel):
+    """Response ao registrar imagem de transformador"""
+    sucesso: bool
+    imagem_id: Optional[int] = None
+    bandas_registradas: int = 0
+    mensagem: str
 
 @router.get(
     "/subestacao/{subestacao_id}/coordenadas",
@@ -311,462 +400,8 @@ def consultar_disponibilidade_satelite(
         ) from exc
 
 
-@router.get(
-    "/bbox/{subestacao_id}",
-    response_model=BoundingBoxModel,
-    summary="Obter bounding box de uma subestação"
-)
-def get_bounding_box_subestacao(
-    subestacao_id: int,
-    engine: EngineDepends,
-    raio_km: float = Query(
-        default=5.0,
-        ge=0.5,
-        le=50.0,
-        description="Área poligonal de cobertura em km (bounding box)"
-    )
-):
-    """
-    Retorna apenas a bounding box (retângulo geográfico) de uma subestação.
-    Útil para recortes de imagens e consultas de APIs.
-    
-    - **subestacao_id**: ID da subestação
-    - **raio_km**: Área poligonal de cobertura em km (baseada em bbox)
-    
-    **Exemplo de resposta:**
-    ```json
-    {
-        "min_lat": -19.970,
-        "max_lat": -19.880,
-        "min_lon": -43.983,
-        "max_lon": -43.893,
-        "center": {
-            "latitude": -19.925,
-            "longitude": -43.938
-        },
-        "dimensoes": {
-            "largura_km": 10.0,
-            "altura_km": 10.0
-        }
-    }
-    ```
-    """
-    try:
-        from sqlalchemy import text
-        
-        # Buscar subestação
-        query = text("""
-            SELECT latitude, longitude
-            FROM subestacoes_detectadas
-            WHERE id = :id
-        """)
-        
-        with engine.connect() as conn:
-            result = conn.execute(query, {"id": subestacao_id}).fetchone()
-        
-        if not result:
-            raise DatabaseError("Subestação não encontrada")
-        
-        latitude, longitude = result
-        
-        service = INPESatelliteService(logger=logger)
-        bbox = service.calcular_bbox_subestacao(latitude, longitude, raio_km)
-        
-        return BoundingBoxModel(
-            min_lat=bbox.min_lat,
-            max_lat=bbox.max_lat,
-            min_lon=bbox.min_lon,
-            max_lon=bbox.max_lon,
-            center={
-                "latitude": bbox.center_lat,
-                "longitude": bbox.center_lon
-            },
-            dimensoes={
-                "largura_km": bbox.width_km,
-                "altura_km": bbox.height_km
-            }
-        )
-    
-    except Exception as exc:
-        logger.error(
-            f"Erro ao calcular bbox para subestação {subestacao_id}: {exc}",
-            exc_info=True
-        )
-        raise DatabaseError(
-            "Falha ao calcular bounding box"
-        ) from exc
-
-
-@router.post(
-    "/subestacao/{subestacao_id}/consultar-e-registrar",
-    summary="Consultar STAC e registrar imagens automaticamente",
-    description="""
-    Consulta STAC (Sentinel-2, Landsat) automaticamente e registra as imagens encontradas.
-    
-    Fluxo:
-    1. Busca coordenadas da subestação
-    2. Consulta Sentinel-2 e Landsat via STAC
-    3. Registra as imagens no banco automaticamente
-    4. Retorna URLs das imagens registradas
-    """
-)
-def consultar_e_registrar_imagens(
-    subestacao_id: int,
-    data_inicio: str = Query("2025-01-01", description="Data início (YYYY-MM-DD)"),
-    data_fim: str = Query("2025-12-31", description="Data fim (YYYY-MM-DD)"),
-    raio_km: float = Query(5.0, ge=1, le=50, description="Área poligonal em km (bounding box)"),
-    cobertura_nuvem_max: int = Query(30, ge=0, le=100, description="Cobertura máxima de nuvens %"),
-    sensores: list = Query(["Sentinel-2", "Landsat"], description="Sensores a consultar"),
-    engine: EngineDepends = None
-):
-    """
-    Consulta STAC e registra imagens de satélite automaticamente.
-    
-    Args:
-        subestacao_id: ID da subestação
-        data_inicio: Data início (YYYY-MM-DD)
-        data_fim: Data fim (YYYY-MM-DD)
-        raio_km: Área poligonal de busca em km (baseada em bbox)
-        cobertura_nuvem_max: Cobertura máxima de nuvens (%)
-        sensores: Lista de sensores (Sentinel-2, Landsat)
-        engine: Conexão com banco
-        
-    Returns:
-        Dicionário com imagens registradas e URLs
-    """
-    try:
-        import requests
-        from datetime import datetime
-        
-        service = INPESatelliteService(logger=logger)
-        
-        # Buscar coordenadas da subestação
-        resultado_coords = get_coordenadas_subestacao(
-            subestacao_id=subestacao_id,
-            engine=engine,
-            raio_km=raio_km
-        )
-        
-        if "erro" in resultado_coords:
-            raise DatabaseError(resultado_coords["erro"])
-        
-        bbox = resultado_coords["bbox"]
-        
-        imagens_registradas = []
-        erros = []
-        
-        # Consultar Sentinel-2
-        if "Sentinel-2" in sensores:
-            try:
-                logger.info(f"Consultando Sentinel-2 para subestação {subestacao_id}...")
-                
-                payload_s2 = {
-                    "bbox": [bbox["min_lon"], bbox["min_lat"], bbox["max_lon"], bbox["max_lat"]],
-                    "datetime": f"{data_inicio}T00:00:00Z/{data_fim}T23:59:59Z",
-                    "query": {"eo:cloud_cover": {"lte": cobertura_nuvem_max}},
-                    "collections": ["sentinel-2-l2a"],
-                    "limit": 5
-                }
-                
-                resp = requests.post(
-                    "https://planetarycomputer.microsoft.com/api/stac/v1/search",
-                    json=payload_s2,
-                    timeout=30
-                )
-                resp.raise_for_status()
-                
-                items = resp.json().get("features", [])
-                logger.info(f"Encontradas {len(items)} imagens Sentinel-2")
-                
-                for item in items:
-                    try:
-                        # Extrair URL - preferir visual (RGB) ou rendered_preview
-                        assets = item.get("assets", {})
-                        visual = assets.get("visual") or assets.get("rendered_preview")
-                        
-                        if not visual:
-                            logger.warning(f"Nenhuma imagem RGB encontrada. Assets: {list(assets.keys())}")
-                            continue
-                        
-                        url = visual.get("href")
-                        if not url:
-                            logger.warning("URL não encontrada no asset visual")
-                            continue
-                        
-                        data_aquisicao = item.get("properties", {}).get("datetime", datetime.now().isoformat())
-                        cloud_cover = item.get("properties", {}).get("eo:cloud_cover", cobertura_nuvem_max)
-                        
-                        logger.info(f"Processando Sentinel-2: {url[:80]}...")
-                        
-                        # Registrar no banco
-                        from ..schemas import RegistrarImagemRequest
-                        
-                        img_request = RegistrarImagemRequest(
-                            sensor="Sentinel-2",
-                            data_aquisicao=data_aquisicao,
-                            resolucao_m=10,
-                            cobertura_nuvem_pct=cloud_cover,
-                            url=url,
-                            propriedades={
-                                "tile": item.get("properties", {}).get("s2:tile_id"),
-                                "processing_level": "L2A",
-                                "asset_type": "visual"
-                            }
-                        )
-                        
-                        resultado_reg = registrar_imagem_subestacao(
-                            subestacao_id=subestacao_id,
-                            imagem=img_request,
-                            engine=engine
-                        )
-                        
-                        if resultado_reg.status == "sucesso":
-                            imagens_registradas.append({
-                                "sensor": "Sentinel-2",
-                                "url": url,
-                                "data": data_aquisicao,
-                                "cobertura_nuvem": cloud_cover
-                            })
-                            logger.info(f"✓ Sentinel-2 registrada: ID {resultado_reg.imagem_id}")
-                        else:
-                            logger.warning(f"Falha ao registrar: {resultado_reg.mensagem}")
-                            erros.append(f"Falha ao registrar Sentinel-2: {resultado_reg.mensagem}")
-                        
-                    except Exception as e:
-                        logger.error(f"Erro ao processar item Sentinel-2: {e}", exc_info=True)
-                        erros.append(f"Sentinel-2: {str(e)}")
-                        
-            except Exception as e:
-                logger.error(f"Erro ao consultar Sentinel-2: {e}")
-                erros.append(f"Sentinel-2: {str(e)}")
-        
-        # Consultar Landsat
-        if "Landsat" in sensores:
-            try:
-                logger.info(f"Consultando Landsat para subestação {subestacao_id}...")
-                
-                payload_ls = {
-                    "bbox": [bbox["min_lon"], bbox["min_lat"], bbox["max_lon"], bbox["max_lat"]],
-                    "datetime": f"{data_inicio}T00:00:00Z/{data_fim}T23:59:59Z",
-                    "limit": 5
-                }
-                
-                resp = requests.post(
-                    "https://rstac.cr.usgs.gov/collections/landsat-c2-l2/items",
-                    json=payload_ls,
-                    timeout=30
-                )
-                resp.raise_for_status()
-                
-                items = resp.json().get("features", [])
-                logger.info(f"Encontradas {len(items)} imagens Landsat")
-                
-                for item in items:
-                    try:
-                        # Extrair URL do Landsat
-                        assets = item.get("assets", {})
-                        rgb = assets.get("rendered_browse")
-                        
-                        if not rgb:
-                            continue
-                        
-                        url = rgb.get("href")
-                        data_aquisicao = item.get("properties", {}).get("datetime", datetime.now().isoformat())
-                        cloud_cover = item.get("properties", {}).get("landsat:cloud_cover", 50)
-                        
-                        # Registrar no banco
-                        from ..schemas import RegistrarImagemRequest
-                        
-                        img_request = RegistrarImagemRequest(
-                            sensor="Landsat",
-                            data_aquisicao=data_aquisicao,
-                            resolucao_m=30,
-                            cobertura_nuvem_pct=cloud_cover,
-                            url=url,
-                            propriedades={
-                                "processing_level": "L2"
-                            }
-                        )
-                        
-                        registrar_imagem_subestacao(
-                            subestacao_id=subestacao_id,
-                            imagem=img_request,
-                            engine=engine
-                        )
-                        
-                        imagens_registradas.append({
-                            "sensor": "Landsat",
-                            "url": url,
-                            "data": data_aquisicao,
-                            "cobertura_nuvem": cloud_cover
-                        })
-                        
-                        logger.info(f"✓ Landsat registrada: {url}")
-                        
-                    except Exception as e:
-                        logger.warning(f"Erro ao processar item Landsat: {e}")
-                        erros.append(str(e))
-                        
-            except Exception as e:
-                logger.error(f"Erro ao consultar Landsat: {e}")
-                erros.append(f"Landsat: {str(e)}")
-        
-        return {
-            "subestacao_id": subestacao_id,
-            "imagens_registradas": len(imagens_registradas),
-            "imagens": imagens_registradas,
-            "erros": erros,
-            "mensagem": f"{len(imagens_registradas)} imagens registradas com sucesso"
-        }
-        
-    except Exception as exc:
-        logger.error(
-            f"Erro ao consultar e registrar imagens para subestação {subestacao_id}: {exc}",
-            exc_info=True
-        )
-        raise DatabaseError(
-            f"Falha ao consultar STAC: {str(exc)}"
-        ) from exc
-
-
-@router.post(
-    "/planetary-computer/{subestacao_id}",
-    response_model=dict,
-    summary="Consultar Planetary Computer com assinatura automática"
-)
-def consultar_planetary_computer(
-    subestacao_id: int,
-    engine: EngineDepends,
-    data_inicio: str = Query(default=None, description="Data início (YYYY-MM-DD)"),
-    data_fim: str = Query(default=None, description="Data fim (YYYY-MM-DD)"),
-    raio_km: float = Query(default=5.0, ge=0.5, le=50.0),
-    cobertura_nuvem_max: int = Query(default=30, ge=0, le=100),
-):
-    """
-    Consulta Planetary Computer (STAC) para Sentinel-2 com assinatura automática.
-    
-    URLs retornadas já possuem assinatura válida do Planetary Computer.
-    
-    - **subestacao_id**: ID da subestação
-    - **data_inicio**: Data no formato YYYY-MM-DD
-    - **data_fim**: Data no formato YYYY-MM-DD
-    - **raio_km**: Raio de busca em km
-    - **cobertura_nuvem_max**: Cobertura máxima de nuvens (0-100)
-    """
-    if not HAS_STAC:
-        raise DatabaseError(
-            "Dependências não instaladas. Execute: pip install pystac-client planetary-computer"
-        )
-    
-    try:
-        # Obter coordenadas da subestação
-        service = INPESatelliteService(logger=logger)
-        dados = service.consultar_subestacao_satellite_data(
-            engine=engine,
-            subestacao_id=subestacao_id,
-            raio_km=raio_km
-        )
-        
-        if "erro" in dados:
-            raise DatabaseError(dados["erro"])
-        
-        subestacao = dados["subestacao"]
-        latitude = subestacao["latitude"]
-        longitude = subestacao["longitude"]
-        
-        # Datas padrão
-        if not data_fim:
-            data_fim = datetime.utcnow().date().isoformat()
-        if not data_inicio:
-            data_inicio = (datetime.utcnow() - timedelta(days=90)).date().isoformat()
-        
-        logger.info(f"Consultando Planetary Computer: ({latitude}, {longitude})")
-        logger.info(f"Período: {data_inicio} a {data_fim}, nuvens: {cobertura_nuvem_max}%")
-        
-        # Conectar ao STAC do Planetary Computer
-        client = Client.open(
-            "https://planetarycomputer.microsoft.com/api/stac/v1",
-            modifier=planetary_computer.sign_inplace,
-        )
-        
-        # Definir bbox
-        buffer_graus = raio_km / 111
-        bbox = [
-            longitude - buffer_graus,
-            latitude - buffer_graus,
-            longitude + buffer_graus,
-            latitude + buffer_graus,
-        ]
-        
-        # Buscar Sentinel-2
-        search = client.search(
-            collections=["sentinel-2-l2a"],
-            bbox=bbox,
-            datetime=f"{data_inicio}T00:00:00Z/{data_fim}T23:59:59Z",
-            query={"eo:cloud_cover": {"lt": cobertura_nuvem_max}},
-            max_items=20,
-        )
-        
-        # Processar resultados
-        imagens = []
-        
-        for item in search.items():
-            props = item.properties
-            assets = item.assets
-            
-            # URL do asset visual
-            visual_url = None
-            if "visual" in assets:
-                visual_url = assets["visual"].href
-            elif "TCI_10m" in assets:
-                visual_url = assets["TCI_10m"].href
-            
-            # Aplicar assinatura
-            if visual_url and visual_url.startswith("https://"):
-                visual_url = planetary_computer.sign_url(visual_url)
-            
-            imagem_info = {
-                "id": item.id,
-                "data": item.datetime.isoformat() if item.datetime else props.get("datetime"),
-                "sensor": "Sentinel-2",
-                "cobertura_nuvem": props.get("eo:cloud_cover", 0),
-                "url": visual_url,
-                "bbox": item.bbox,
-            }
-            
-            imagens.append(imagem_info)
-            logger.debug(f"Imagem: {item.id}, nuvens: {imagem_info['cobertura_nuvem']:.1f}%")
-        
-        logger.info(f"Total: {len(imagens)} imagens encontradas")
-        
-        return {
-            "subestacao_id": subestacao_id,
-            "subestacao": subestacao,
-            "imagens_encontradas": len(imagens),
-            "imagens": imagens,
-            "periodo": {
-                "data_inicio": data_inicio,
-                "data_fim": data_fim,
-            },
-            "filtros": {
-                "raio_km": raio_km,
-                "cobertura_nuvem_max": cobertura_nuvem_max,
-            },
-            "nota": "URLs já possuem assinatura automática do Planetary Computer"
-        }
-        
-    except Exception as exc:
-        logger.error(
-            f"Erro ao consultar Planetary Computer: {exc}",
-            exc_info=True
-        )
-        raise DatabaseError(
-            f"Falha ao consultar Planetary Computer: {str(exc)}"
-        ) from exc
-
-
 # ==========================================
-# NOVOS ENDPOINTS CBERS-4A (INPE) - RESOLUÇÃO 2m
+# ENDPOINTS CBERS-4A (INPE) - RESOLUÇÃO 2m
 # ==========================================
 
 @router.get(
@@ -891,334 +526,263 @@ async def buscar_cbers_subestacao(
         logger.error(f"Erro ao buscar CBERS para subestação {subestacao_id}: {exc}", exc_info=True)
         raise DatabaseError(f"Falha ao buscar imagens CBERS: {str(exc)}") from exc
 
-
-@router.get(
-    "/cbers/download-banda/{image_id}",
-    summary="Download de banda CBERS-4A",
-    description="Baixa uma banda específica de uma imagem CBERS-4A (pan, red, green, blue, nir)"
-)
-async def download_banda_cbers(
-    image_id: str,
-    banda: str = Query(..., description="Nome da banda: pan, red, green, blue, nir"),
-    bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat")
-):
-    """
-    Baixa uma banda específica de imagem CBERS-4A.
-    
-    Args:
-        image_id: ID da imagem CBERS
-        banda: Nome da banda (pan, red, green, blue, nir)
-        bbox: Opcional - recorte (min_lon,min_lat,max_lon,max_lat)
-        
-    Returns:
-        Array numpy com dados da banda
-    """
-    try:
-        import numpy as np
-        
-        cbers_service = CBERSService()
-        
-        # Parse bbox se fornecido
-        bbox_tuple = None
-        if bbox:
-            bbox_parts = [float(x) for x in bbox.split(",")]
-            if len(bbox_parts) == 4:
-                bbox_tuple = tuple(bbox_parts)
-        
-        # Download da banda
-        dados_banda = cbers_service.download_banda(
-            image_id=image_id,
-            banda=banda,
-            bbox=bbox_tuple
-        )
-        
-        if dados_banda is None:
-            raise DatabaseError(f"Banda {banda} não encontrada na imagem {image_id}")
-        
-        return {
-            "image_id": image_id,
-            "banda": banda,
-            "shape": dados_banda.shape,
-            "dtype": str(dados_banda.dtype),
-            "min": float(np.min(dados_banda)),
-            "max": float(np.max(dados_banda)),
-            "mean": float(np.mean(dados_banda))
-        }
-        
-    except Exception as exc:
-        logger.error(f"Erro ao baixar banda {banda}: {exc}", exc_info=True)
-        raise DatabaseError(f"Falha ao baixar banda: {str(exc)}") from exc
-
-
-@router.get(
-    "/cbers/composicao-rgb/{image_id}",
-    summary="Criar composição RGB de imagem CBERS-4A",
-    description="Cria uma composição RGB (true color) de uma imagem CBERS-4A"
-)
-async def criar_composicao_rgb_cbers(
-    image_id: str,
-    bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat"),
-    salvar_caminho: Optional[str] = Query(None, description="Caminho para salvar a imagem")
-):
-    """
-    Cria composição RGB de imagem CBERS-4A.
-    
-    Args:
-        image_id: ID da imagem CBERS
-        bbox: Opcional - recorte (min_lon,min_lat,max_lon,max_lat)
-        salvar_caminho: Opcional - caminho para salvar a imagem PNG
-        
-    Returns:
-        Informações sobre a composição RGB criada
-    """
-    try:
-        from PIL import Image
-        import numpy as np
-        
-        cbers_service = CBERSService()
-        
-        # Parse bbox se fornecido
-        bbox_tuple = None
-        if bbox:
-            bbox_parts = [float(x) for x in bbox.split(",")]
-            if len(bbox_parts) == 4:
-                bbox_tuple = tuple(bbox_parts)
-        
-        # Criar composição RGB
-        rgb_image = cbers_service.criar_composicao_rgb(
-            image_id=image_id,
-            bbox=bbox_tuple,
-            salvar_caminho=salvar_caminho
-        )
-        
-        if rgb_image is None:
-            raise DatabaseError(f"Falha ao criar composição RGB para imagem {image_id}")
-        
-        # Converter PIL Image para numpy array para estatísticas
-        rgb_array = np.array(rgb_image)
-        
-        return {
-            "image_id": image_id,
-            "composicao": "RGB (True Color)",
-            "shape": rgb_array.shape,
-            "bandas": ["Red", "Green", "Blue"],
-            "salvo_em": salvar_caminho if salvar_caminho else None,
-            "estatisticas": {
-                "min": int(rgb_array.min()),
-                "max": int(rgb_array.max()),
-                "mean": float(rgb_array.mean())
-            }
-        }
-        
-    except Exception as exc:
-        logger.error(f"Erro ao criar composição RGB: {exc}", exc_info=True)
-        raise DatabaseError(f"Falha ao criar composição RGB: {str(exc)}") from exc
-
-
 # ============================================================================
-# ESTRATÉGIA HÍBRIDA - CBERS + Google Maps Fallback
+# ENDPOINTS - TRANSFORMADOR
 # ============================================================================
 
-@router.post(
-    "/hibrido/buscar",
-    response_model=dict,
-    summary="Buscar imagem com fallback automático (CBERS → Google Maps)",
-    description="""
-    Busca imagem de satélite usando estratégia híbrida com fallback automático:
-    
-    1. **CBERS-4A** (2m, grátis) - Primeira escolha
-    2. **Google Maps** (0.3m, 25k grátis/mês) - Fallback automático
-    3. **Sentinel-2** (10m, grátis) - Última opção (desabilitado)
-    
-    **Estratégias disponíveis:**
-    - `auto`: Escolha inteligente baseada em resolução preferida
-    - `alta_resolucao`: Prioriza Google Maps (melhor qualidade)
-    - `custo_zero`: Apenas fontes gratuitas (CBERS + Sentinel)
-    - `rapido`: Prioriza cache e fontes rápidas
-    """
-)
-async def buscar_imagem_hibrida(
-    latitude: Annotated[float, Query(description="Latitude da localização", ge=-90, le=90)],
-    longitude: Annotated[float, Query(description="Longitude da localização", ge=-180, le=180)],
-    raio_km: Annotated[float, Query(description="Raio de busca em km", ge=1, le=100)] = 10.0,
-    estrategia: Annotated[str, Query(description="Estratégia de busca")] = "auto",
-    usar_cache: Annotated[bool, Query(description="Usar cache de imagens")] = True,
-    preferencia_resolucao: Annotated[float, Query(description="Resolução preferida em m/pixel")] = 2.0
-):
-    """
-    Busca imagem com fallback automático entre CBERS, Google Maps e Sentinel-2
-    """
-    try:
-        from ..services.imagem_strategy_service import ImagemStrategyService
-        
-        logger.info(f"Buscando imagem híbrida: ({latitude}, {longitude})")
-        logger.info(f"  Estratégia: {estrategia}")
-        logger.info(f"  Raio: {raio_km} km")
-        
-        # Validar estratégia
-        estrategias_validas = ["auto", "alta_resolucao", "custo_zero", "rapido"]
-        if estrategia not in estrategias_validas:
-            raise DatabaseError(
-                f"Estratégia inválida: {estrategia}. "
-                f"Válidas: {', '.join(estrategias_validas)}"
-            )
-        
-        # Inicializar serviço
-        strategy_service = ImagemStrategyService(
-            preferencia_resolucao=preferencia_resolucao
-        )
-        
-        # Buscar imagem
-        resultado = strategy_service.buscar_imagem_automatica(
-            latitude=latitude,
-            longitude=longitude,
-            raio_km=raio_km,
-            usar_cache=usar_cache,
-            estrategia=estrategia
-        )
-        
-        if resultado is None:
-            return {
-                "sucesso": False,
-                "mensagem": "Nenhuma fonte de imagem disponível",
-                "fonte": None,
-                "estrategia_usada": estrategia,
-                "estatisticas": strategy_service.get_estatisticas()
-            }
-        
-        # Sucesso
-        return {
-            "sucesso": True,
-            "fonte": resultado.fonte,
-            "resolucao_m": resultado.resolucao_m,
-            "shape": list(resultado.imagem.shape),
-            "latitude": resultado.latitude,
-            "longitude": resultado.longitude,
-            "timestamp": resultado.timestamp.isoformat(),
-            "metadata": resultado.metadata,
-            "estrategia_usada": estrategia,
-            "mensagem": f"Imagem obtida de {resultado.fonte.upper()} com resolução {resultado.resolucao_m}m/pixel"
-        }
-        
-    except Exception as exc:
-        logger.error(f"Erro ao buscar imagem híbrida: {exc}", exc_info=True)
-        raise DatabaseError(f"Falha na busca híbrida: {str(exc)}") from exc
-
-
 @router.get(
-    "/hibrido/estatisticas",
-    response_model=dict,
-    summary="Estatísticas de uso da estratégia híbrida",
-    description="Retorna estatísticas de tentativas e sucessos por fonte de imagem"
+    "/transformador/{transformador_id}/imagens/historico",
+    response_model=ListarImagensTransformadorResponse,
+    summary="Listar imagens salvas do transformador no banco"
 )
-async def get_estatisticas_hibridas():
-    """
-    Retorna estatísticas agregadas de uso das fontes de imagem
-    """
-    try:
-        from ..services.imagem_strategy_service import ImagemStrategyService
-        
-        # Criar instância temporária para pegar estatísticas
-        strategy_service = ImagemStrategyService()
-        stats = strategy_service.get_estatisticas()
-        
-        return {
-            "sucesso": True,
-            "estatisticas": stats
-        }
-        
-    except Exception as exc:
-        logger.error(f"Erro ao obter estatísticas: {exc}", exc_info=True)
-        raise DatabaseError(f"Falha ao obter estatísticas: {str(exc)}") from exc
-
-
-@router.get(
-    "/hibrido/custo-estimado",
-    response_model=dict,
-    summary="Estimar custo do Google Maps",
-    description="Calcula custo estimado para uso do Google Maps Static API"
-)
-async def estimar_custo_google_maps(
-    num_imagens: Annotated[int, Query(description="Número de imagens", ge=1, le=1000000)] = 1000
+def listar_imagens_historico_transformador(
+    engine: EngineDepends,
+    transformador_id: int = Path(..., gt=0, description="ID do transformador"),
+    limit: int = Query(50, ge=1, le=100, description="Máximo de registros a retornar"),
+    offset: int = Query(0, ge=0, description="Deslocamento para paginação"),
+    apenas_sucesso: bool = Query(True, description="Retornar apenas requisições bem-sucedidas")
 ):
     """
-    Estima custo para usar Google Maps (25k grátis, depois $0.002/imagem)
-    """
-    try:
-        from ..services.google_maps_service import GoogleMapsService
-        
-        google_service = GoogleMapsService()
-        estimativa = google_service.estimar_custo(num_imagens)
-        
-        return {
-            "sucesso": True,
-            "estimativa": estimativa,
-            "google_maps_disponivel": google_service.esta_disponivel()
-        }
-        
-    except Exception as exc:
-        logger.error(f"Erro ao estimar custo: {exc}", exc_info=True)
-        raise DatabaseError(f"Falha ao estimar custo: {str(exc)}") from exc
-
-
-@router.post(
-    "/hibrido/processar-lote",
-    response_model=dict,
-    summary="Processar múltiplas localizações em lote",
-    description="Busca imagens para várias localizações usando estratégia híbrida"
-)
-async def processar_lote_hibrido(
-    localizacoes: list[dict],
-    estrategia: Annotated[str, Query(description="Estratégia de busca")] = "auto",
-    preferencia_resolucao: Annotated[float, Query(description="Resolução preferida")] = 2.0
-):
-    """
-    Processa múltiplas localizações em lote
+    Lista imagens salvas no banco de dados para um transformador.
     
-    Exemplo de payload:
-    ```json
-    [
-        {"id": 1, "latitude": -15.7939, "longitude": -47.8828},
-        {"id": 2, "latitude": -23.5505, "longitude": -46.6333}
-    ]
+    Retorna histórico de requisições CBERS-4A com:
+    - **ID da requisição** - identificador único
+    - **imagem_id** - ID CBERS-4A (ex: CBERS_4A_WFI_20260130_210_132_L4)
+    - **url_download** - URL para download da imagem
+    - **data_imagem** - Data de aquisição
+    - **cobertura_nuvem_percentual** - % de cobertura de nuvens
+    - **resolucao_metros** - Resolução em metros
+    - **status** - sucesso / sem_cobertura / erro
+    - **data_requisicao** - Quando a requisição foi feita
+    
+    **Parâmetros:**
+    - `transformador_id`: ID do transformador
+    - `limit`: Máximo de registros (padrão: 50)
+    - `offset`: Página (padrão: 0)
+    - `apenas_sucesso`: Filtrar por sucesso (padrão: true)
+    
+    **Exemplo:**
+    ```
+    GET /satelite/v2/transformador/1/imagens/historico?limit=10&apenas_sucesso=true
     ```
     """
     try:
-        from ..services.imagem_strategy_service import ImagemStrategyService
+        from sqlalchemy import text
         
-        logger.info(f"Processando lote de {len(localizacoes)} localizações")
+        # Query SQL para buscar imagens
+        where_clause = "WHERE transformador_id = :transformador_id"
+        if apenas_sucesso:
+            where_clause += " AND status = 'sucesso'"
         
-        # Validar entrada
-        if not localizacoes:
-            raise DatabaseError("Lista de localizações vazia")
+        query = f"""
+            SELECT 
+                id,
+                imagem_id,
+                url_download,
+                data_imagem,
+                cobertura_nuvem_percentual,
+                resolucao_metros,
+                status,
+                data_requisicao
+            FROM requisicoes_satelite_cbers4a
+            {where_clause}
+            ORDER BY data_requisicao DESC
+            LIMIT :limit OFFSET :offset
+        """
         
-        if len(localizacoes) > 100:
-            raise DatabaseError("Máximo de 100 localizações por lote")
+        # Query para contar total
+        count_query = f"""
+            SELECT COUNT(*) as total
+            FROM requisicoes_satelite_cbers4a
+            {where_clause}
+        """
         
-        # Inicializar serviço
-        strategy_service = ImagemStrategyService(
-            preferencia_resolucao=preferencia_resolucao
+        with engine.begin() as conn:
+            # Executar query de contagem
+            result_count = conn.execute(
+                text(count_query),
+                {'transformador_id': transformador_id}
+            )
+            total_sucesso = result_count.scalar() or 0
+            
+            # Executar query de dados
+            result = conn.execute(
+                text(query),
+                {
+                    'transformador_id': transformador_id,
+                    'limit': limit,
+                    'offset': offset
+                }
+            )
+            
+            imagens = []
+            for row in result:
+                imagens.append(ImagemSalvaResponse(
+                    id=row[0],
+                    imagem_id=row[1],
+                    url_download=row[2],
+                    data_imagem=str(row[3]) if row[3] else None,
+                    cobertura_nuvem_percentual=float(row[4]) if row[4] is not None else None,
+                    resolucao_metros=float(row[5]) if row[5] is not None else None,
+                    status=row[6],
+                    data_requisicao=str(row[7]) if row[7] else None
+                ))
+        
+        # Contar total geral (sem limite)
+        with engine.begin() as conn:
+            result_total = conn.execute(
+                text(count_query),
+                {'transformador_id': transformador_id}
+            )
+            total_requisicoes = result_total.scalar() or 0
+        
+        return ListarImagensTransformadorResponse(
+            transformador_id=transformador_id,
+            total_requisicoes=total_requisicoes,
+            total_sucesso=total_sucesso,
+            imagens=imagens
         )
         
-        # Processar lote
-        resultados = strategy_service.processar_lista_subestacoes(
-            subestacoes=localizacoes,
-            estrategia=estrategia
+    except Exception as e:
+        logger.error(f"❌ Erro ao listar imagens: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# ENDPOINTS - SUBESTAÇÃO
+# ============================================================================
+
+@router.get(
+    "/subestacao/{subestacao_id}/imagens",
+    response_model=Dict,
+    summary="Buscar imagens de satélite para subestação"
+)
+def buscar_imagens_subestacao(
+    engine: EngineDepends,
+    subestacao_id: int = Path(..., gt=0, description="ID da subestação"),
+    cobertura_nuvem_max: int = Query(
+        30,
+        ge=0,
+        le=100,
+        description="Máximo % de cobertura de nuvens"
+    ),
+    dias_passados: int = Query(
+        90,
+        ge=1,
+        le=365,
+        description="Buscar nos últimos N dias"
+    )
+):
+    """
+    Busca imagens CBERS-4A para toda a área de uma subestação (polígono).
+    
+    **Retorna:**
+    - Imagens ordenadas por qualidade (menos nuvens primeiro)
+    - Bounding box da subestação
+    - Período da busca
+    - Status da operação
+    """
+    try:
+        data_fim = datetime.now().strftime('%Y-%m-%d')
+        data_inicio = (
+            datetime.now() -
+            __import__('datetime').timedelta(days=dias_passados)
+        ).strftime('%Y-%m-%d')
+        
+        sat_service = SatelliteServiceV2(engine)
+        inpe_service = INPEServiceV2(engine, sat_service)
+        
+        resultado = inpe_service.buscar_imagens_cbers4a_poligono(
+            subestacao_id=subestacao_id,
+            data_inicio=data_inicio,
+            data_fim=data_fim,
+            cobertura_nuvem_max=cobertura_nuvem_max
         )
         
-        # Contar sucessos
-        sucessos = sum(1 for r in resultados if r.get('sucesso'))
+        return resultado
         
-        return {
-            "sucesso": True,
-            "total_processado": len(resultados),
-            "sucessos": sucessos,
-            "falhas": len(resultados) - sucessos,
-            "taxa_sucesso": (sucessos / len(resultados) * 100) if resultados else 0,
-            "resultados": resultados,
-            "estatisticas": strategy_service.get_estatisticas()
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar imagens: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/google-maps/info",
+    response_model=Dict,
+    summary="Quota e estatísticas de uso do Google Maps"
+)
+def obter_info_google_maps(
+    engine: EngineDepends
+):
+    """
+    Retorna quota e estatísticas detalhadas de uso do Google Maps.
+    
+    **Resposta inclui:**
+    - Quota do mês atual (limite, usado, disponível, percentual, custo estimado)
+    - Transformadores únicos buscados
+    - Total de requisições históricas
+    - Histórico dos últimos 30 dias
+    - Última requisição
+    
+    **Exemplo:**
+    ```json
+    {
+        "quota": {
+            "limite_mensal": 25000,
+            "usada_mes_atual": 1250,
+            "disponivel": 23750,
+            "percentual_uso": 5.0,
+            "custo_estimado_usd": 8.75,
+            "ultima_requisicao": "2024-01-15T10:30:00"
+        },
+        "estatisticas": {
+            "total_requisicoes": 5420,
+            "transformadores_unicos": 42,
+            "historico_30_dias": [...],
+            "quota_mes_atual": {...}
+        },
+        "mes_ano": "2024-01",
+        "total_requisicoes_mes": 1250,
+        "requisicoes_sucesso_mes": 1200,
+        "requisicoes_erro_mes": 50
+    }
+    ```
+    """
+    try:
+        import os
+        from ..services.google_maps_quota_service import GoogleMapsQuotaService
+        
+        api_key = os.getenv('GOOGLE_MAPS_API_KEY')
+        
+        service = GoogleMapsServiceV2(engine=engine, api_key=api_key)
+        quota = service.obter_quota_google_maps_mes_atual()
+        stats = service.obter_estatisticas_google_maps()
+        
+        # Migração de dados úteis de /telhados/quota-mes
+        quota_service = GoogleMapsQuotaService(engine)
+        quota_mes_detalhada = quota_service.obter_quota_mes()
+        
+        resultado = {
+            "quota": quota,
+            "estatisticas": stats
         }
         
-    except Exception as exc:
-        logger.error(f"Erro ao processar lote: {exc}", exc_info=True)
-        raise DatabaseError(f"Falha no processamento em lote: {str(exc)}") from exc
+        # Adicionar informações de quota do mês
+        if quota_mes_detalhada.get('sucesso'):
+            resultado.update({
+                "mes_ano": quota_mes_detalhada.get('mes_ano'),
+                "total_requisicoes_mes": quota_mes_detalhada.get('quota_usada_requests'),
+                "quota_total": quota_mes_detalhada.get('quota_total'),
+                "percentual_uso_mensal": quota_mes_detalhada.get('percentual_uso'),
+                "custo_estimado_usd": quota_mes_detalhada.get('custo_estimado_usd')
+            })
+            
+            # Atualizar quota com custo
+            if "quota" in resultado:
+                resultado["quota"]["custo_estimado_usd"] = quota_mes_detalhada.get('custo_estimado_usd')
+        
+        return resultado
+    
+    except Exception as e:
+        logger.error(f"❌ Erro ao obter informações do Google Maps: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
