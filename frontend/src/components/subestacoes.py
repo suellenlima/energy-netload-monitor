@@ -108,7 +108,7 @@ def render_tab_subestacoes_detectadas(client: ApiClient, distribuidora: str | No
         "Raio (km)", "Subsistema", "Distribuidora"
     ]
     
-    df_display["Potência (MW)"] = df_display["Potência (MW)"].apply(lambda x: f"{x:.1f}")
+    df_display["Potência (MW)"] = df_display["Potência (MW)"].apply(lambda x: f"{x:.1f}" if x is not None else "-")
     
     st.dataframe(df_display, use_container_width=True, hide_index=True)
     

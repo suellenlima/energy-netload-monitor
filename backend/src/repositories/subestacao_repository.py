@@ -30,7 +30,7 @@ class SubestacaoRepository(BaseRepository):
         where_clause, params = self._build_filter_clause(
             "distribuidora", distribuidora, "dist"
         )
-        params["limite"] = limite
+        params = {**params, "limite": limite}
 
         query = text(f"""
             SELECT id_estacao as id, nome, sigla_se, tensao_kv, subsistema,
@@ -67,7 +67,7 @@ class SubestacaoRepository(BaseRepository):
         where_clause, params = self._build_filter_clause(
             "distribuidora", distribuidora, "dist"
         )
-        params["limite"] = limite
+        params = {**params, "limite": limite}
 
         query = text(f"""
             SELECT id, cluster_id, nome, latitude, longitude, distribuidora,

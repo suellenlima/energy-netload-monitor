@@ -1,0 +1,114 @@
+# ============================================================================
+# Energy Netload Monitor - Requirements
+# ============================================================================
+# Instalação completa: pip install -r requirements.txt
+# ============================================================================
+
+# ============================================================================
+# CORE - Dependências principais
+# ============================================================================
+pandas>=2.2.0
+numpy>=1.26.0,<2.0.0
+requests>=2.32.0
+python-dotenv>=1.2.0
+
+# ============================================================================
+# GEOSPATIAL - Análise espacial e dados geográficos
+# ============================================================================
+# Necessário para ETL com dados reais (ONS, ANEEL, OpenStreetMap)
+geopandas>=0.14.4
+shapely>=2.0.5
+fiona>=1.10.1
+pyproj>=3.7.2
+rasterio>=1.3.10
+
+# ============================================================================
+# DATABASE - PostgreSQL + PostGIS + TimescaleDB
+# ============================================================================
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.32
+geoalchemy2>=0.15.2
+
+# ============================================================================
+# WEB API - FastAPI Backend
+# ============================================================================
+fastapi>=0.115.0
+uvicorn>=0.30.6
+pydantic>=2.12.5
+pydantic-settings>=2.2.1
+starlette>=0.38.6
+httpx>=0.27.2
+
+# ============================================================================
+# SATELLITE - Imagens de satélite (Sentinel-2, Landsat, CBERS)
+# ============================================================================
+pystac>=1.14.3
+pystac-client>=0.9.0
+planetary-computer>=1.0.0
+
+# ============================================================================
+# COMPUTER VISION - Detecção de painéis solares e segmentação
+# ============================================================================
+opencv-python>=4.8.0
+ultralytics>=8.4.0
+torch>=2.10.0
+torchvision>=0.25.0
+pillow>=12.1.0
+
+# ============================================================================
+# MACHINE LEARNING - Modelos e treinamento
+# ============================================================================
+scikit-learn>=1.3.2
+scipy>=1.17.0
+
+# ============================================================================
+# VISUALIZATION - Gráficos e mapas
+# ============================================================================
+matplotlib>=3.10.0
+seaborn>=0.13.0
+
+# ============================================================================
+# TESTING - Testes unitários e integração
+# ============================================================================
+pytest>=8.3.2
+
+# ============================================================================
+# UTILITIES - Ferramentas auxiliares
+# ============================================================================
+python-dateutil>=2.9.0
+tqdm>=4.66.0
+
+# ============================================================================
+# NOTAS DE INSTALAÇÃO
+# ============================================================================
+#
+# Para ETL com dados reais (ONS, ANEEL, OpenStreetMap):
+#   pip install geopandas shapely requests psycopg2-binary pandas
+#
+# Para desenvolvimento completo:
+#   pip install -r requirements.txt
+#
+# Para apenas backend:
+#   pip install -r backend/requirements.txt
+#
+# Para apenas ETL:
+#   pip install -r etl_pipeline/requirements.txt
+#
+# Para notebooks (ML/análise):
+#   pip install -r notebooks/requirements.txt
+#
+# ============================================================================
+# TROUBLESHOOTING
+# ============================================================================
+#
+# Se erro com geopandas no Windows:
+#   conda install geopandas
+#   # OU baixar wheel: https://www.lfd.uci.edu/~gohlke/pythonlibs/
+#
+# Se erro com GDAL:
+#   conda install gdal
+#
+# Se erro com Shapely:
+#   pip install --upgrade shapely --no-binary shapely
+#
+# ============================================================================
