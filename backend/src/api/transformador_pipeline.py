@@ -28,7 +28,6 @@ from ..schemas.painel_solar import (
     PainelSolarResponse,
     EstimativaPotenciaResponse,
     TelhadorComPaineis,
-    DeteccaoPainelSolarResponse
 )
 from ..services.telhado_segmentation_service import TelhadoSegmentationService
 from ..services.painel_solar_detection_service import PainelSolarDetectionService
