@@ -39,7 +39,7 @@ def render_sidebar(client: ApiClient) -> SidebarState:
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("Cruzamento com IA")
-    multiplicador = st.sidebar.slider("Projeção de Fraudes (Quantidade de casos)", 1, 5000, 1)
+    multiplicador = st.sidebar.slider("Projeção de MMGD (Quantidade de casos)", 1, 5000, 1)
     st.sidebar.info("Arraste para simular o impacto de múltiplas fraudes na rede.")
 
     refresh = st.sidebar.button("Atualizar Dashboard", type="primary")

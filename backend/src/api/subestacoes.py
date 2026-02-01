@@ -267,3 +267,91 @@ def get_subestacoes_resumo(repo: SubestacaoRepoDepends):
     except Exception as exc:
         logger.error(f"Erro ao gerar resumo: {exc}", exc_info=True)
         raise DatabaseError("Falha ao gerar resumo") from exc
+
+
+# ============================================================================
+# ÁREA DE COBERTURA - INTEGRAÇÃO COM TRANSFORMADORES
+# ============================================================================
+
+from ..services.area_service import AreaService
+
+
+@router.get("/{id}/area")
+def get_subestacao_area(
+    id: int,
+    engine: EngineDepends,
+    formato: str = Query("geojson", regex="^(geojson|wkt|json)$")
+):
+    """
+    Obtém a área de cobertura de uma subestação.
+    
+    - **formato**: geojson | wkt | json (default: geojson)
+    """
+    try:
+        service = AreaService(engine)
+        area_data = service.obter_area_subestacao(id)
+        
+        if not area_data:
+            raise DatabaseError(f"Subestação {id} não encontrada")
+        
+        if formato == "wkt":
+            return {"id": id, "wkt": area_data['wkt_area']}
+        elif formato == "geojson":
+            import json
+            return {
+                "id": id,
+                "type": "Feature",
+                "geometry": json.loads(area_data['geojson_area']) if area_data['geojson_area'] else None,
+                "properties": {
+                    "nome": area_data['nome'],
+                    "area_km2": area_data['area_km2'],
+                    "total_transformadores": area_data['total_transformadores']
+                }
+            }
+        else:  # json
+            return area_data
+            
+    except Exception as exc:
+        logger.error(f"Erro ao buscar área da subestação {id}: {exc}", exc_info=True)
+        raise DatabaseError(str(exc))
+
+
+@router.get("/{id}/transformadores")
+def get_subestacao_transformadores(
+    id: int,
+    engine: EngineDepends
+):
+    """
+    Lista todos os transformadores de uma subestação com suas áreas de cobertura.
+    """
+    try:
+        service = AreaService(engine)
+        df = service.listar_transformadores_subestacao(id)
+        
+        if df.empty:
+            raise DatabaseError(f"Subestação {id} não encontrada ou sem transformadores")
+        
+        return {
+            "subestacao_id": id,
+            "total": len(df),
+            "transformadores": df.to_dict(orient='records')
+        }
+        
+    except Exception as exc:
+        logger.error(f"Erro ao buscar transformadores da subestação {id}: {exc}", exc_info=True)
+        raise DatabaseError(str(exc))
+
+
+@router.get("/areas/stats")
+def get_areas_statistics(engine: EngineDepends):
+    """
+    Obtém estatísticas gerais de áreas de cobertura.
+    """
+    try:
+        service = AreaService(engine)
+        stats = service.obter_estatisticas_areas()
+        return stats
+        
+    except Exception as exc:
+        logger.error(f"Erro ao buscar estatísticas de áreas: {exc}", exc_info=True)
+        raise DatabaseError(str(exc))

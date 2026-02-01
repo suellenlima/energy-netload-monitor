@@ -1,0 +1,165 @@
+✅ NOVO ENDPOINT: Registrar Imagem com 5 Bandas para Transformador
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📝 ENDPOINT CRIADO:
+
+  POST /satelite/v2/transformador/{transformador_id}/registrar-imagem
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🔄 COMPARAÇÃO ANTES vs DEPOIS:
+
+  ANTES (endpoints existentes)
+  ─────────────────────────────
+  └─ GET /satelite/v2/transformador/{id}/imagens
+     • Busca imagens no CBERS-4A ✅
+     • Apenas lista, não salva ❌
+     • Sem bandas persistidas ❌
+  
+  └─ POST /satelite/subestacao/{id}/registrar-imagem
+     • Salva 1 URL apenas ❌
+     • Sem suporte a 5 bandas ❌
+     • Sem endpoint para transformador ❌
+
+  DEPOIS (novo endpoint)
+  ───────────────────────
+  └─ POST /satelite/v2/transformador/{id}/registrar-imagem ✨ NOVO
+     • Salva metadados ✅
+     • Salva todas as 5 bandas ✅
+     • Uma chamada faz tudo ✅
+     • Para transformador ✅
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📊 REQUEST/RESPONSE:
+
+  REQUEST:
+  ────────
+  POST /satelite/v2/transformador/47/registrar-imagem
+  
+  {
+    "transformador_id": 47,
+    "subestacao_id": 5,
+    "imagem_id": "CBERS_4A_WPM_20260131_225_117_L4",
+    "data_aquisicao": "2026-01-31T13:12:41",
+    "sensor": "CBERS-4A",
+    "resolucao_m": 2.0,
+    "cobertura_nuvem_pct": 15.5,
+    "urls_bandas": {
+      "blue": "https://...",
+      "green": "https://...",
+      "red": "https://...",
+      "nir": "https://...",
+      "swir": "https://..."
+    }
+  }
+
+  RESPONSE:
+  ────────
+  {
+    "sucesso": true,
+    "imagem_id": 123,
+    "bandas_registradas": 5,
+    "mensagem": "Imagem registrada com sucesso (5 bandas)"
+  }
+
+═══════════════════════════════════════════════════════════════════════════════
+
+💾 O QUE É SALVO NO BANCO:
+
+  Tabela: satelite_imagens (1 linha)
+  ──────────────────────────────────
+  id: 123
+  imagem_id_inpe: CBERS_4A_WPM_20260131_225_117_L4
+  data_imagem: 2026-01-31 13:12:41
+  sensor: CBERS-4A
+  resolucao_m: 2.0
+  cobertura_nuvem: 15.5
+  url: https://...(primeira banda)
+  subestacao_id: 5
+
+  Tabela: satelite_bandas (5 linhas)
+  ──────────────────────────────────
+  (numero_banda=0, nome="BLUE", url="https://.../BAND0.tif")
+  (numero_banda=1, nome="GREEN", url="https://.../BAND1.tif")
+  (numero_banda=2, nome="RED", url="https://.../BAND2.tif")
+  (numero_banda=3, nome="NIR", url="https://.../BAND3.tif")
+  (numero_banda=4, nome="SWIR", url="https://.../BAND4.tif")
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🔗 FLUXO COMPLETO DE USO:
+
+  1. GET /satelite/v2/transformador/{id}/imagens
+     └─ Busca imagens no CBERS-4A → retorna URLs das 5 bandas
+
+  2. POST /satelite/v2/transformador/{id}/registrar-imagem ✨ NOVO
+     └─ Salva as 5 bandas no banco → retorna imagem_id
+
+  3. POST /telhados/transformador/detectar-telhados
+     └─ Processa com ImagemMultibandaLoader
+     └─ Retorna: rgb_multiespectral, clahe_aplicado, ndvi_filtro_aplicado
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📋 ARQUIVOS MODIFICADOS/CRIADOS:
+
+  Modificados:
+  ────────────
+  ✅ backend/src/api/satelite_v2.py
+     • Adicionou 2 schemas novos
+     • Adicionou novo endpoint POST
+
+  Criados:
+  ────────
+  ✅ exemplo_registrar_imagem_transformador.py
+  ✅ NOVO_ENDPOINT_REGISTRAR_IMAGEM.md
+  ✅ RESUMO_NOVO_ENDPOINT.txt (este arquivo)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🧪 TESTE:
+
+  Python:
+  ───────
+  python exemplo_registrar_imagem_transformador.py
+
+  CURL:
+  ─────
+  curl -X POST http://127.0.0.1:8000/satelite/v2/transformador/47/registrar-imagem \
+    -H "Content-Type: application/json" \
+    -d '{...}'
+
+  PowerShell:
+  ───────────
+  $body = @{...} | ConvertTo-Json
+  Invoke-WebRequest -Uri $url -Method POST -Body $body
+
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ STATUS: PRONTO PARA USAR
+
+  • Endpoint implementado ✅
+  • Schemas criados ✅
+  • Exemplo fornecido ✅
+  • Documentação completa ✅
+  • Backward compatible ✅
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📝 RESPOSTA A SUA PERGUNTA:
+
+  "não tem como salvar imagem, fazer o mesmo, para transformador?"
+  
+  RESPOSTA: SIM! ✅
+  
+  Novo endpoint: POST /satelite/v2/transformador/{id}/registrar-imagem
+  
+  Salva:
+  • Metadados da imagem ✅
+  • URLs das 5 bandas ✅
+  • Tudo em uma única chamada ✅
+  • Pronto para YOLO ✅
+
+═══════════════════════════════════════════════════════════════════════════════
