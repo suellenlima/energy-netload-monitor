@@ -195,42 +195,7 @@ class AreaService:
                 'geojson_area': row[8],
                 'total_transformadores': row[9]
             }
-    
-    def listar_subestacoes_com_areas(self) -> pd.DataFrame:
-        """Lista subestações com estatísticas de suas áreas"""
-        
-        with self.engine.begin() as conn:
-            result = conn.execute(text("""
-                SELECT 
-                    se.id,
-                    se.nome,
-                    se.subsistema,
-                    se.latitude,
-                    se.longitude,
-                    sac.area_km2,
-                    sac.metodo_definicao,
-                    COUNT(DISTINCT t.id) as total_transformadores,
-                    COUNT(DISTINCT tac.id) as transformadores_com_area,
-                    ROUND(AVG(tac.area_km2)::numeric, 2) as area_media_transformador_km2,
-                    ROUND(SUM(tac.area_km2)::numeric, 2) as area_total_transformadores_km2
-                FROM subestacoes_detectadas se
-                LEFT JOIN subestacoes_area_cobertura sac ON sac.subestacao_id = se.id
-                LEFT JOIN transformadores t ON t.subestacao_id = se.id AND t.status = 'ativo'
-                LEFT JOIN transformadores_area_cobertura tac ON tac.transformador_id = t.id
-                GROUP BY se.id, se.nome, se.subsistema, se.latitude, 
-                         se.longitude, sac.area_km2, sac.metodo_definicao
-                ORDER BY se.nome
-            """))
-            
-            df = pd.DataFrame(result.fetchall(), columns=[
-                'id', 'nome', 'subsistema', 'latitude', 'longitude',
-                'area_km2', 'metodo_definicao', 'total_transformadores', 
-                'transformadores_com_area', 'area_media_transformador_km2',
-                'area_total_transformadores_km2'
-            ])
-            
-            return df
-    
+
     # ========================================================================
     # BUSCAS ESPACIAIS
     # ========================================================================

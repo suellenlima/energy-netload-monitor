@@ -16,8 +16,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple
-from pathlib import Path
+from typing import List, Dict, Optional
 
 import numpy as np
 import cv2

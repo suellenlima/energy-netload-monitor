@@ -13,11 +13,9 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
-import geopandas as gpd
 import numpy as np
-import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -387,63 +385,23 @@ class INPESatelliteService:
         """
         Armazena metadados de imagem de satélite no banco.
         
+        NOTA: As tabelas satelite_imagens e satelite_bandas devem ser criadas previamente
+        usando o schema SQL em: infrastructure/database/001_satelite_tables.sql
+        
         Args:
             engine: Engine SQLAlchemy
             subestacao_id: ID da subestação
             metadata: Metadados da imagem
         
         Returns:
-            True se armazenado com sucesso
+            ID da imagem armazenada, ou None se houver erro
         """
-        # Criar tabelas se não existirem
-        create_table_query = text("""
-            CREATE TABLE IF NOT EXISTS satelite_imagens (
-                id SERIAL PRIMARY KEY,
-                subestacao_id INTEGER,
-                sensor VARCHAR(50),
-                data_aquisicao TIMESTAMPTZ,
-                resolucao_m INTEGER,
-                cobertura_nuvem_pct FLOAT,
-                url TEXT,
-                bbox_json JSONB,
-                propriedades_json JSONB,
-                url_google_maps_satellite TEXT,
-                url_google_maps_hybrid TEXT,
-                data_registro TIMESTAMPTZ DEFAULT NOW()
-            );
-            
-            CREATE TABLE IF NOT EXISTS satelite_bandas (
-                id SERIAL PRIMARY KEY,
-                imagem_id INTEGER NOT NULL REFERENCES satelite_imagens(id) ON DELETE CASCADE,
-                numero_banda INTEGER NOT NULL CHECK (numero_banda >= 0 AND numero_banda <= 4),
-                nome_banda VARCHAR(20) NOT NULL,
-                url TEXT NOT NULL,
-                resolucao_m INTEGER,
-                data_registro TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE(imagem_id, numero_banda),
-                CHECK (nome_banda IN ('blue', 'green', 'red', 'nir', 'swir'))
-            );
-            
-            CREATE INDEX IF NOT EXISTS idx_satelite_subestacao 
-                ON satelite_imagens(subestacao_id);
-            CREATE INDEX IF NOT EXISTS idx_satelite_data 
-                ON satelite_imagens(data_aquisicao DESC);
-            CREATE INDEX IF NOT EXISTS idx_bandas_imagem 
-                ON satelite_bandas(imagem_id);
-            CREATE INDEX IF NOT EXISTS idx_bandas_nome 
-                ON satelite_bandas(nome_banda);
-        """)
-        
         try:
+            import json
+            
             with engine.begin() as conn:
-                # Criar tabelas se não existirem (será idempotente)
-                print(f"[DEBUG] Criando tabelas...")
-                conn.execute(create_table_query)
-                print(f"[DEBUG] ✅ Tabelas OK")
-                
-                # Inserir registro
+                # Inserir registro de imagem
                 print(f"[DEBUG] Preparando INSERT para imagem {metadata.id}...")
-                import json
                 insert_query = text("""
                     INSERT INTO satelite_imagens 
                     (subestacao_id, sensor, data_aquisicao, resolucao_m, 
@@ -488,99 +446,6 @@ class INPESatelliteService:
             print(f"{tb_str}")
             print(f"{'='*80}\n")
             return None
-    
-    def registrar_banda(
-        self,
-        engine: Engine,
-        imagem_id: int,
-        numero_banda: int,
-        nome_banda: str,
-        url_banda: str,
-        resolucao_m: Optional[int] = None
-    ) -> bool:
-        """
-        Registra uma banda específica de uma imagem.
-        
-        Args:
-            engine: Engine SQLAlchemy
-            imagem_id: ID da imagem (de satelite_imagens)
-            numero_banda: Número da banda (0-4)
-            nome_banda: Nome da banda ('blue', 'green', 'red', 'nir', 'swir')
-            url_banda: URL para download da banda
-            resolucao_m: Resolução específica da banda (opcional)
-        
-        Returns:
-            True se registrado com sucesso
-        """
-        valid_names = {'blue', 'green', 'red', 'nir', 'swir'}
-        if nome_banda not in valid_names:
-            self.logger.error(f"Nome de banda inválido: {nome_banda}")
-            return False
-        
-        if numero_banda < 0 or numero_banda > 4:
-            self.logger.error(f"Número de banda inválido: {numero_banda}")
-            return False
-        
-        try:
-            insert_query = text("""
-                INSERT INTO satelite_bandas 
-                (imagem_id, numero_banda, nome_banda, url, resolucao_m)
-                VALUES (:img_id, :num, :nome, :url, :res)
-                ON CONFLICT (imagem_id, numero_banda) 
-                DO UPDATE SET url = :url, resolucao_m = :res
-            """)
-            
-            with engine.connect() as conn:
-                conn.execute(insert_query, {
-                    "img_id": imagem_id,
-                    "num": numero_banda,
-                    "nome": nome_banda,
-                    "url": url_banda,
-                    "res": resolucao_m
-                })
-                conn.commit()
-            
-            self.logger.info(
-                f"Banda {numero_banda} ({nome_banda}) registrada para imagem {imagem_id}"
-            )
-            return True
-        
-        except Exception as e:
-            self.logger.error(f"Erro ao registrar banda: {e}", exc_info=True)
-            return False
-    
-    def obter_bandas_imagem(
-        self,
-        engine: Engine,
-        imagem_id: int
-    ) -> Dict[str, str]:
-        """
-        Obtém todas as URLs de bandas de uma imagem.
-        
-        Args:
-            engine: Engine SQLAlchemy
-            imagem_id: ID da imagem
-        
-        Returns:
-            Dicionário {nome_banda: url}
-        """
-        try:
-            query = text("""
-                SELECT nome_banda, url 
-                FROM satelite_bandas 
-                WHERE imagem_id = :img_id 
-                ORDER BY numero_banda
-            """)
-            
-            with engine.connect() as conn:
-                result = conn.execute(query, {"img_id": imagem_id})
-                bandas = {row[0]: row[1] for row in result}
-            
-            return bandas
-        
-        except Exception as e:
-            self.logger.error(f"Erro ao obter bandas: {e}", exc_info=True)
-            return {}
     
     def listar_imagens_subestacao(
         self,

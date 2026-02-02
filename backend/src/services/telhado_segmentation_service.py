@@ -10,8 +10,6 @@ Pipeline completo para:
 
 MIGRAÇÃO: Sentinel-2 (10m) → CBERS-4A (2m) para melhor detecção de telhados
 
-Author: Energy Netload Monitor
-Date: 2025-01-30
 """
 
 import os
@@ -21,14 +19,12 @@ from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Any
 from pathlib import Path
-from abc import ABC, abstractmethod
 
 import numpy as np
 import cv2
 import requests
-from PIL import Image, ImageDraw
+from PIL import Image
 from io import BytesIO
-from urllib.parse import urlparse
 
 try:
     from ultralytics import YOLO
@@ -322,104 +318,6 @@ class TelhadoSegmentationService:
                 return f"{url}?{sas_token}"
         
         return url
-    
-    # ============================================================================
-    # PASSO 1: DOWNLOAD DE IMAGEM COM ESTRATÉGIA HÍBRIDA (NOVO)
-    # ============================================================================
-    
-    def download_imagem_automatica(self, latitude: float, longitude: float,
-                                   raio_km: float = 5.0,
-                                   estrategia: str = "auto") -> Optional[np.ndarray]:
-        """
-        Baixa imagem com fallback automático: CBERS → Google Maps → Sentinel
-        
-        Args:
-            latitude: Latitude central
-            longitude: Longitude central
-            raio_km: Raio de busca
-            estrategia: "auto", "alta_resolucao", "custo_zero", "rapido"
-            
-        Returns:
-            Imagem como numpy array (RGB) ou None se todas fontes falharam
-        """
-        if not self.usar_estrategia_hibrida:
-            logger.warning("Estratégia híbrida não habilitada, use download_imagem_cbers()")
-            return None
-        
-        try:
-            resultado = self.strategy.buscar_imagem_automatica(
-                latitude=latitude,
-                longitude=longitude,
-                raio_km=raio_km,
-                usar_cache=True,
-                estrategia=estrategia
-            )
-            
-            if resultado:
-                logger.info(f"✓ Imagem obtida de {resultado.fonte.upper()}")
-                logger.info(f"  Resolução: {resultado.resolucao_m}m/pixel")
-                return resultado.imagem
-            else:
-                logger.error("✗ Nenhuma fonte de imagem disponível")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Erro na estratégia híbrida: {e}", exc_info=True)
-            return None
-    
-    def download_imagem_cbers(self, image_id: str, bbox: Optional[tuple] = None, 
-                             usar_cache: bool = True) -> Optional[np.ndarray]:
-        """
-        Baixa imagem CBERS-4A (composição RGB) com suporte a cache
-        
-        NOTA: Use download_imagem_automatica() para fallback automático!
-        
-        Args:
-            image_id: ID da imagem CBERS
-            bbox: Bbox opcional para recorte (min_lon, min_lat, max_lon, max_lat)
-            usar_cache: Se deve usar cache
-            
-        Returns:
-            Imagem como numpy array (RGB) ou None se erro
-        """
-        try:
-            # Se estratégia híbrida estiver habilitada, usar ela
-            if self.usar_estrategia_hibrida:
-                cbers_service = self.strategy.cbers
-            else:
-                cbers_service = self.cbers_service
-            
-            # Tentar buscar do cache primeiro
-            if usar_cache and hasattr(self, 'cache') and self.cache:
-                cached = self.cache.get(image_id, "rgb", bbox)
-                if cached is not None:
-                    logger.info(f"✓ Imagem CBERS carregada do cache: {image_id}")
-                    return cached
-            
-            # Download da composição RGB do CBERS
-            logger.info(f"Baixando composição RGB CBERS: {image_id}")
-            rgb_image = cbers_service.criar_composicao_rgb(
-                image_id=image_id,
-                bbox=bbox
-            )
-            
-            if rgb_image is None:
-                logger.error(f"Falha ao baixar imagem CBERS: {image_id}")
-                return None
-            
-            # Converter PIL Image para numpy array
-            imagem_array = np.array(rgb_image)
-            
-            # Armazenar no cache
-            if usar_cache and hasattr(self, 'cache') and self.cache:
-                self.cache.put(image_id, "rgb", imagem_array, bbox)
-            
-            logger.info(f"✓ Imagem CBERS baixada: {imagem_array.shape}")
-            return imagem_array
-            
-        except Exception as e:
-            logger.error(f"Erro ao baixar imagem CBERS: {e}", exc_info=True)
-            return None
     
     # ============================================================================
     # PASSO 1 (LEGADO): DOWNLOAD DE IMAGEM SENTINEL-2

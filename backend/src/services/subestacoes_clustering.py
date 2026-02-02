@@ -8,12 +8,11 @@ padrões que indicam subestações implícitas na rede.
 import logging
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import Tuple
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from scipy.spatial.distance import cdist
 from sklearn.cluster import DBSCAN
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -23,7 +22,6 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from core import delete_all_rows, table_exists
-from core.database import get_engine
 
 
 def detect_subestacoes_by_clustering(

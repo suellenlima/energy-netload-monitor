@@ -18,7 +18,6 @@ from .satelite import (
     PeriodoTemporal,
     RegistrarImagemRequest,
     RegistrarImagemResponse,
-    URLSConsultaSatelite,
     URLSTACQuery,
     URLWMSQuery,
 )
@@ -31,21 +30,13 @@ from .subestacao import (
     TaskAsyncResponse,
 )
 from .telhado import (
-    SegmentarTelhadoRequest,
-    ProcessarLoteTelhadosRequest,
-    ConsultarTelhadosRequest,
     CoordenadaGeografica,
     BoundingBoxPixeis,
     CentroidePixeis,
     TelhadoDetectadoResponse,
-    TelhadoSegmentadoResponse,
     ResultadoSegmentacaoResponse,
-    ResultadoProcessamentoYOLOResponse,
-    ResultadoLoteResponse,
     ListaTelhadosResponse,
     EstatisticasSegmentacaoResponse,
-    ProcessarComYOLORequest,
-    RegistrarModeloYOLORequest,
 )
 
 __all__ = [
@@ -66,7 +57,6 @@ __all__ = [
     "PeriodoTemporal",
     "URLSTACQuery",
     "URLWMSQuery",
-    "URLSConsultaSatelite",
     "DadosSatelliteSubestacao",
     "ImagemSateliteMetadata",
     "ListaImagensSatelite",
@@ -84,15 +74,7 @@ __all__ = [
     "BoundingBoxPixeis",
     "CentroidePixeis",
     "TelhadoDetectadoResponse",
-    "TelhadoSegmentadoResponse",
     "ResultadoSegmentacaoResponse",
-    "ResultadoProcessamentoYOLOResponse",
     "ListaTelhadosResponse",
     "EstatisticasSegmentacaoResponse",
-    "SegmentarTelhadoRequest",
-    "ProcessarLoteTelhadosRequest",
-    "ConsultarTelhadosRequest",
-    "ProcessarComYOLORequest",
-    "RegistrarModeloYOLORequest",
-    "ResultadoLoteResponse",
 ]

@@ -4,19 +4,15 @@ Serviço de Cache para Imagens de Satélite
 Gerencia cache local de imagens CBERS-4A para evitar downloads repetidos.
 Suporta múltiplas estratégias de cache e limpeza automática.
 
-Author: Energy Netload Monitor
-Date: 2025-01-30
 """
 
 import hashlib
 import json
 import logging
-import os
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-import pickle
 
 import numpy as np
 
@@ -192,34 +188,6 @@ class CacheService:
             logger.error(f"Erro ao armazenar no cache: {e}")
             return False
     
-    def clear_old_entries(self) -> int:
-        """
-        Remove entradas antigas do cache
-        
-        Returns:
-            Número de entradas removidas
-        """
-        removed = 0
-        cutoff_date = datetime.now() - timedelta(days=self.max_age_days)
-        
-        for cache_key, entry in list(self.metadata["entries"].items()):
-            try:
-                created = datetime.fromisoformat(entry["created"])
-                if created < cutoff_date:
-                    cache_path = self._get_cache_path(cache_key)
-                    if cache_path.exists():
-                        cache_path.unlink()
-                    del self.metadata["entries"][cache_key]
-                    removed += 1
-            except Exception as e:
-                logger.error(f"Erro ao remover entrada {cache_key}: {e}")
-        
-        if removed > 0:
-            self._save_metadata()
-            logger.info(f"Removidas {removed} entradas antigas do cache")
-        
-        return removed
-    
     def get_stats(self) -> Dict[str, Any]:
         """Retorna estatísticas do cache"""
         total_size = sum(e.get("size_mb", 0) for e in self.metadata["entries"].values())
@@ -242,54 +210,3 @@ class CacheService:
         
         return stats
     
-    def clear_all(self) -> bool:
-        """
-        Remove todo o cache
-        
-        Returns:
-            True se sucesso
-        """
-        try:
-            if self.cache_dir.exists():
-                shutil.rmtree(self.cache_dir)
-                self.cache_dir.mkdir(parents=True)
-                
-            self.metadata = {
-                "created": datetime.now().isoformat(),
-                "entries": {},
-                "stats": {
-                    "hits": 0,
-                    "misses": 0,
-                    "total_size_mb": 0
-                }
-            }
-            self._save_metadata()
-            
-            logger.info("Cache completamente limpo")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Erro ao limpar cache: {e}")
-            return False
-    
-    def list_entries(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """
-        Lista entradas do cache
-        
-        Args:
-            limit: Número máximo de entradas
-            
-        Returns:
-            Lista de entradas ordenadas por último acesso
-        """
-        entries = []
-        for cache_key, entry in self.metadata["entries"].items():
-            entries.append({
-                "cache_key": cache_key,
-                **entry
-            })
-        
-        # Ordenar por último acesso (mais recente primeiro)
-        entries.sort(key=lambda x: x.get("last_access", ""), reverse=True)
-        
-        return entries[:limit]
