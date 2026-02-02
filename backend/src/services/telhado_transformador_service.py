@@ -1,21 +1,6 @@
 """
 Serviço de Detecção de Telhados por Transformador
 
-Pipeline especializado para:
-1. Buscar transformadores de uma subestação
-2. Obter imagens via Google Maps ou CBERS-4A (por transformador)
-3. Detectar telhados/edifícios (YOLOv8)
-4. Segmentar telhados individuais
-5. Extrair ROIs para análise de painéis solares
-
-Diferenças vs TelhadoSegmentationService:
-- Escopo: Transformador (1-2 km²) ao invés de subestação (5-100 km²)
-- Resolução: Prioriza Google Maps (0.3m) ou CBERS-4A (2m)
-- Processamento: Mais rápido, áreas menores
-- Aplicação: Análise de potencial solar residencial/comercial
-
-Author: Energy Netload Monitor
-Date: 2026-01-31
 """
 
 import os
@@ -24,8 +9,7 @@ import logging
 import requests
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
-from typing import List, Dict, Tuple, Optional, Any
-from pathlib import Path
+from typing import List, Dict, Optional
 
 import numpy as np
 import cv2

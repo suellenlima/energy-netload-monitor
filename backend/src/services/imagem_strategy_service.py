@@ -5,16 +5,12 @@ Implementa fallback automático:
 1. CBERS-4A (2m, grátis) - Primeira escolha
 2. Google Maps (0.3-0.6m, 25k grátis/mês) - Fallback
 3. Sentinel-2 (10m, grátis) - Última opção
-
-Author: Energy Netload Monitor
-Date: 2025-01-30
 """
 
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Optional, Tuple, List
+from typing import Optional, List
 from pathlib import Path
 import numpy as np
 from dotenv import load_dotenv
@@ -313,54 +309,3 @@ class ImagemStrategyService:
             
             logger.info(f"{fonte.upper():<15} {tentativas:>3} tentativas | {sucessos:>3} sucessos | {taxa:>5.1f}%")
     
-    def get_estatisticas(self) -> dict:
-        """Retorna estatísticas de uso"""
-        return {
-            "stats": self.stats,
-            "cache_stats": self.cache.get_stats(),
-            "google_maps_disponivel": self.google_maps.esta_disponivel()
-        }
-    
-    def processar_lista_subestacoes(
-        self,
-        subestacoes: List[dict],
-        estrategia: str = "auto"
-    ) -> List[dict]:
-        """
-        Processa lista de subestações com estratégia híbrida
-        
-        Args:
-            subestacoes: Lista de dicts com 'id', 'latitude', 'longitude'
-            estrategia: Estratégia a usar
-            
-        Returns:
-            Lista de resultados com imagens
-        """
-        resultados = []
-        
-        logger.info(f"\nProcessando {len(subestacoes)} subestações com estratégia '{estrategia}'")
-        
-        for idx, sub in enumerate(subestacoes, 1):
-            logger.info(f"\n[{idx}/{len(subestacoes)}] Subestação {sub.get('id', '?')}")
-            
-            resultado = self.buscar_imagem_automatica(
-                latitude=sub['latitude'],
-                longitude=sub['longitude'],
-                estrategia=estrategia
-            )
-            
-            resultados.append({
-                "subestacao_id": sub.get('id'),
-                "sucesso": resultado is not None,
-                "fonte": resultado.fonte if resultado else None,
-                "resolucao_m": resultado.resolucao_m if resultado else None,
-                "imagem": resultado.imagem if resultado else None
-            })
-        
-        # Resumo
-        sucessos = sum(1 for r in resultados if r['sucesso'])
-        logger.info(f"\n✓ Processamento concluído: {sucessos}/{len(subestacoes)} com sucesso")
-        
-        self._log_estatisticas()
-        
-        return resultados

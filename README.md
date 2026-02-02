@@ -8,10 +8,8 @@ Projeto de monitoramento de carga liquida combinando dados do ONS, ANEEL e clima
 ## Subindo o ambiente
 ```powershell
 docker-compose up --build
-```
-Alternativa (Compose v2):
-```powershell
-docker compose up --build
+
+or docker-compose build --no-cache && docker-compose up
 ```
 
 ## Servicos e portas
@@ -39,21 +37,8 @@ docker-compose up -d etl
 
 Criar schema
 ```powershell
+# Schema completo consolidado (recomendado - 1 único arquivo)
 Get-Content infrastructure/database/schema.sql | docker compose exec -T db psql -U admin -d energy_monitor
-Get-Content infrastructure/database/001_satelite_tables.sql | docker compose exec -T db psql -U admin -d energy_monitor
-Get-Content infrastructure/database/002_telhado_tables.sql | docker compose exec -T db psql -U admin -d energy_monitor
-Get-Content infrastructure/database/003_sincronizar_subestacoes.sql | docker compose exec -T db psql -U admin -d energy_monitor
-Get-Content infrastructure/database/004_area_cobertura_real.sql | docker compose exec -T db psql -U admin -d energy_monitor
-Get-Content infrastructure/database/005_schema_dados_reais.sql | docker compose exec -T db psql -U admin -d energy_monitor
-Get-Content infrastructure/database/satelite_tracking.sql | docker compose exec -T db psql -U admin -d energy_monitor
-Get-Content infrastructure/database/telhados_transformador.sql | docker compose exec -T db psql -U admin -d energy_monitor
-Get-Content infrastructure/database/006_add_area_poligonal_transformador.sql | docker compose exec -T db psql -U admin -d energy_monitor
-Get-Content infrastructure/database/007_add_transformador_to_cbers4a.sql | docker compose exec -T db psql -U admin -d energy_monitor
-Get-Content infrastructure/database/008_update_area_poligonal_default.sql | docker compose exec -T db psql -U admin -d energy_monitor
-Get-Content infrastructure/database/009_increase_area_poligonal.sql | docker compose exec -T db psql -U admin -d energy_monitor
-Get-Content infrastructure/database/010_add_google_maps_urls.sql | docker compose exec -T db psql -U admin -d energy_monitor
-Get-Content infrastructure/database/migrations/add_url_imagem_origem.sql | docker compose exec -T db psql -U admin -d energy_monitor
-Get-Content infrastructure/database/migrations/create_paineis_solares_tables.sql | docker compose exec -T db psql -U admin -d energy_monitor
 ```
 
 Habilitar PostGIS (se necessario):

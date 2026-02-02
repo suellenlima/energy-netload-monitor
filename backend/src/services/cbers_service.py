@@ -165,31 +165,6 @@ class CBERSService:
             logger.exception(e)
             return []
     
-    def download_banda(self, url: str, timeout: int = 60) -> bytes:
-        """
-        Download de uma banda individual
-        
-        Args:
-            url: URL da banda (GeoTIFF)
-            timeout: Timeout em segundos
-        
-        Returns:
-            Bytes do arquivo
-        """
-        try:
-            logger.info(f"Baixando banda CBERS: {url[:80]}...")
-            response = requests.get(url, timeout=timeout)
-            response.raise_for_status()
-            
-            size_mb = len(response.content) / (1024 * 1024)
-            logger.info(f"✓ Download concluído: {size_mb:.1f} MB")
-            
-            return response.content
-            
-        except Exception as e:
-            logger.error(f"Erro ao baixar banda: {e}")
-            raise
-    
     def criar_composicao_rgb(
         self,
         imagem: ImagemCBERS,
@@ -255,17 +230,3 @@ class CBERSService:
         except Exception as e:
             logger.error(f"Erro ao criar composição RGB: {e}")
             raise
-    
-    def obter_metadata(self, imagem: ImagemCBERS) -> Dict:
-        """Retorna metadados da imagem"""
-        return {
-            "id": imagem.id,
-            "data": imagem.data.isoformat(),
-            "sensor": imagem.sensor,
-            "resolucao": imagem.resolucao,
-            "cobertura_nuvem": imagem.cobertura_nuvem,
-            "bbox": imagem.bbox,
-            "bandas_disponiveis": list(imagem.urls.keys()),
-            "fonte": "INPE - Brazil Data Cube",
-            "colecao": imagem.coleção
-        }

@@ -4,14 +4,12 @@ Busca de imagens estáticas do Google Maps para transformadores
 Com rastreamento de requisições, gerenciamento de quota e suporte a área poligonal
 """
 
-import json
 import logging
 import math
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime
+from typing import Dict, List, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
-import requests
 from urllib.parse import urlencode
 from .google_maps_quota_service import GoogleMapsQuotaService
 
@@ -487,59 +485,7 @@ class GoogleMapsServiceV2:
                 'grid': [],
                 'motivo': f'Erro ao gerar grid: {str(exc)}'
             }
-    
-    # ========================================================================
-    # BUSCA EM LOTE - TRANSFORMADORES
-    # ========================================================================
-    
-    def buscar_imagens_multiplos_transformadores(
-        self,
-        transformador_ids: List[int],
-        zoom: int = 18,
-        tamanho: str = "640x640"
-    ) -> Dict:
-        """
-        Busca imagens para múltiplos transformadores em lote
-        
-        Args:
-            transformador_ids: Lista de IDs de transformadores (máx 100)
-            zoom: Nível de zoom
-            tamanho: Tamanho da imagem
-        
-        Returns:
-            Dict com resultados agregados
-        """
-        logger.info(f"🗺️  Buscando {len(transformador_ids)} transformadores no Google Maps")
-        
-        # Limitar a 100 transformadores
-        transformador_ids = transformador_ids[:100]
-        
-        resultados = []
-        sucessos = 0
-        erros = 0
-        
-        for trans_id in transformador_ids:
-            resultado = self.buscar_imagens_transformador(
-                transformador_id=trans_id,
-                zoom=zoom,
-                tamanho=tamanho
-            )
-            
-            if resultado['sucesso']:
-                sucessos += 1
-            else:
-                erros += 1
-            
-            resultados.append(resultado)
-        
-        return {
-            'total_solicitados': len(transformador_ids),
-            'sucessos': sucessos,
-            'erros': erros,
-            'percentual_sucesso': round(100.0 * sucessos / len(transformador_ids)) if transformador_ids else 0,
-            'resultados': resultados
-        }
-    
+
     # ========================================================================
     # CONSTRUÇÃO DE URLs
     # ========================================================================
