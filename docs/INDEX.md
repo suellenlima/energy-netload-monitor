@@ -1,4 +1,4 @@
-# 📚 ÍNDICE - Sistema de Detecção de Subestações
+# 📚 ÍNDICE - Sistema de Monitoramento de Carga Líquida
 
 ## 🎯 Comece Aqui
 
@@ -8,11 +8,14 @@ Para usuários que desejam **começar imediatamente**:
 Para desenvolvedores que precisam entender a **arquitetura**:
 → [TECHNICAL_SUMMARY.md](TECHNICAL_SUMMARY.md)
 
-Para quem quer o **guia completo** com todos os detalhes:
+Para quem quer o **guia completo de subestações**:
 → [SUBESTACOES_README.md](SUBESTACOES_README.md)
 
 Para ver o **resumo executivo** do que foi implementado:
 → [IMPLEMENTACAO_COMPLETA.md](IMPLEMENTACAO_COMPLETA.md)
+
+Para consultar **diagnóstico do ETL Pipeline**:
+→ [ETL_DIAGNOSTICO.md](ETL_DIAGNOSTICO.md)
 
 ---
 
@@ -58,9 +61,19 @@ CHANGELOG.md                   ← 📝 Registro de Mudanças
 
 ### 💾 Código-Fonte
 
-#### Backend API
+#### Backend API (21+ Endpoints)
 ```
 backend/src/api/
+├─ analise.py (430 linhas)
+│  ├─ GET  /analise/carga-oculta
+│  ├─ GET  /analise/estabelecimentos
+│  ├─ GET  /analise/classes-consumo
+│  ├─ GET  /analise/perfil-carga
+│  ├─ GET  /analise/simulacao-fraude
+│  ├─ GET  /analise/estado-atual
+│  ├─ GET  /analise/alertas-historico
+│  └─ POST /analise/detectar-anomalias
+│
 └─ subestacoes.py (250 linhas)
    ├─ GET  /subestacoes/ons
    ├─ GET  /subestacoes/detectadas
@@ -69,42 +82,94 @@ backend/src/api/
    └─ GET  /subestacoes/resumo
 
 backend/src/services/
-└─ subestacoes_clustering.py (290 linhas)
-   ├─ detect_subestacoes_by_clustering()
-   ├─ _fetch_gd_locations()
-   ├─ _run_dbscan_clustering()
-   ├─ _generate_subestacao_records()
-   └─ load_detected_subestacoes()
+├─ load_calc.py (470 linhas)
+│  ├─ calculate_mmgd_generation()
+│  ├─ get_latest_load_data()
+│  ├─ calculate_real_consumption()
+│  └─ fetch_fraud_alert()
+│
+├─ anomaly_detection.py (800 linhas)
+│  ├─ detect_anomalies()
+│  ├─ generate_historical_alerts()
+│  ├─ _analyze_distribuidora()
+│  └─ _analyze_load_factor()
+│
+├─ subestacoes_clustering.py (290 linhas)
+│  ├─ detect_subestacoes_by_clustering()
+│  ├─ _run_dbscan_clustering()
+│  └─ load_detected_subestacoes()
+│
+├─ synthetic_load.py (250 linhas)
+│  ├─ generate_synthetic_load_curve()
+│  └─ _apply_noise_and_variation()
+│
+└─ realtime_estimation.py (180 linhas)
+   ├─ estimate_current_state()
+   └─ get_current_irradiance()
 ```
 
 #### ETL Pipeline
 ```
 etl_pipeline/src/extractors/
-└─ subestacoes_client.py (280 linhas)
-   ├─ extract_subestacoes_data()
-   ├─ transform_subestacoes_data()
-   ├─ load_subestacoes_data()
-   └─ run_extraction()
+├─ subestacoes_client.py (280 linhas)
+│  ├─ extract_subestacoes_data()
+│  ├─ transform_subestacoes_data()
+│  └─ run_extraction()
+│
+├─ bdgd_client.py
+│  └─ Extração de dados BDGD (ANEEL)
+│
+└─ schedulers/
+   └─ Agendamento de jobs ETL
 ```
 
-#### Frontend UI
+#### Frontend UI (5 Tabs Principais)
 ```
 frontend/src/components/
-└─ subestacoes.py (320 linhas)
-   ├─ render_subestacoes_section()
-   ├─ render_tab_subestacoes_ons()
-   ├─ render_tab_subestacoes_detectadas()
-   ├─ render_tab_mapa_subestacoes()
-   ├─ render_resumo_subestacoes()
-   └─ atualizar_subestacoes_detectadas()
+├─ kpis.py (260 linhas)
+│  ├─ render_executive_kpis()
+│  └─ KPI cards no topo do dashboard
+│
+├─ charts.py (680 linhas)
+│  ├─ render_carga_section()
+│  ├─ render_classes_consumo()
+│  ├─ render_estabelecimentos_section()
+│  └─ render_perfis_carga()
+│
+├─ realtime.py (350 linhas)
+│  ├─ render_realtime_dashboard()
+│  └─ Auto-refresh opcional
+│
+├─ subestacoes.py (700 linhas)
+│  ├─ render_subestacoes_section()
+│  ├─ render_analise_local_subestacao()
+│  └─ 3 sub-tabs (ONS, Detectadas, Mapa)
+│
+├─ audit.py (270 linhas)
+│  ├─ render_auditoria()
+│  └─ render_historico_alertas()
+│
+└─ sidebar.py (180 linhas)
+   ├─ render_sidebar()
+   └─ Controles de filtros
 ```
 
-#### Database
+#### Database (9 Tabelas + Índices)
 ```
 infrastructure/database/
-└─ schema.sql (2 tabelas + 8 índices)
-   ├─ subestacoes_ons
-   └─ subestacoes_detectadas
+└─ schema.sql
+   ├─ carga_liquida_ons (medições ONS)
+   ├─ gd_detalhada (geração distribuída)
+   ├─ usinas_siga (usinas ANEEL)
+   ├─ estabelecimentos (classes de consumo)
+   ├─ subestacoes_ons (subestações oficiais)
+   ├─ subestacoes_detectadas (clustering DBSCAN)
+   ├─ alertas_fraude (detecção manual/IA)
+   ├─ load_profiles (perfis típicos EPE)
+   └─ anomalias_automaticas (detecção automática)
+
+└─ migrations/
+   └─ Histórico de alterações do schema
 ```
 
 #### Scripts
@@ -149,15 +214,19 @@ scripts/
 
 ### ✅ Completamente Implementado
 
-| Feature | File | Status |
-|---------|------|--------|
-| Dados ONS | subestacoes_client.py | ✅ Mock + Ready |
-| Clustering DBSCAN | subestacoes_clustering.py | ✅ Pronto |
-| API REST | subestacoes.py | ✅ 5 Endpoints |
-| Frontend UI | subestacoes.py (frontend) | ✅ 3 Abas |
-| Database | schema.sql | ✅ 2 Tabelas |
-| Documentação | 4 Arquivos | ✅ Completo |
-| Demo/Teste | demo_subestacoes.py | ✅ Funcional |
+| Feature | Componentes | Status |
+|---------|------------|--------|
+| **Análise de Carga** | load_calc.py + charts.py | ✅ Carga líquida vs real |
+| **Estimativa MMGD** | synthetic_load.py + realtime_estimation.py | ✅ Tempo real com irradiância |
+| **Detecção de Anomalias** | anomaly_detection.py + audit.py | ✅ Automática + histórico |
+| **Clustering Subestações** | subestacoes_clustering.py | ✅ DBSCAN geoespacial |
+| **KPIs Executivos** | kpis.py | ✅ 4 cards sempre visíveis |
+| **Dashboard Multi-Tab** | app.py | ✅ 5 tabs principais |
+| **Tempo Real** | realtime.py | ✅ Auto-refresh opcional |
+| **API REST** | analise.py + subestacoes.py | ✅ 21+ endpoints |
+| **Database** | schema.sql + migrations/ | ✅ 9 tabelas + PostGIS |
+| **ETL Pipeline** | extractors/ + schedulers/ | ✅ 4 fontes de dados |
+| **Documentação** | docs/ | ✅ 6 arquivos principais |
 
 ---
 
@@ -293,8 +362,44 @@ Cada documento tem uma seção de troubleshooting. Procure por:
 
 ---
 
-**Última atualização:** 2026-01-21  
-**Versão:** 1.0  
-**Status:** ✅ Completo e Pronto
+---
+
+## 🌟 Visão Geral do Sistema
+
+### 1️⃣ Análise de Carga e Geração
+- **Carga Líquida ONS**: Medições oficiais dos pontos de entrega
+- **Geração MMGD**: Estimativa de solar distribuída (tempo real)
+- **Consumo Real**: Carga líquida + MMGD (consumo total efetivo)
+- **Perfis de Carga**: Curvas típicas por classe (residencial, comercial, industrial)
+
+### 2️⃣ Detecção Automática de Anomalias
+- **Desvio de Consumo**: Identifica variações >30% do esperado
+- **Fator de Carga Atípico**: Detecta padrões anormais (<0.20 ou >0.95)
+- **Picos Anormais**: Identifica picos >2.5x a média
+- **Histórico Completo**: Tabela com filtros e gráficos de distribuição
+
+### 3️⃣ Monitoramento em Tempo Real
+- **Dashboard Operacional**: Estimativas hora a hora
+- **Irradiância Solar**: Integração Open-Meteo
+- **Auto-Refresh**: Atualização automática configurável
+- **KPIs Executivos**: 4 métricas principais sempre visíveis
+
+### 4️⃣ Análise de Subestações
+- **Dados ONS**: Subestações oficiais com mock/real
+- **Clustering DBSCAN**: Detecção automática geoespacial
+- **Visualização Mapa**: GeoJSON para integração
+- **Análise Local**: Estimativas por subestação
+
+### 5️⃣ Auditoria e Integridade
+- **Detecção Manual**: Alertas via inspeção visual
+- **Detecção Automática**: Anomalias identificadas por IA
+- **Severidade**: Classificação alto/médio/baixo
+- **Status**: Acompanhamento ativo/resolvido
+
+---
+
+**Última atualização:** 2026-02-03
+**Versão:** 2.0
+**Status:** ✅ Sistema Completo em Produção
 
 🚀 **Vamos começar!**
