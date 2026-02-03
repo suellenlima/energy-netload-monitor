@@ -161,11 +161,21 @@ def _fetch_classes_consumption_cached(distribuidora: str | None = None) -> list[
 
 
 def fetch_fraud_alert(engine: Engine, distribuidora: str | None = None) -> dict:
+	"""
+	Busca alertas de fraude/anomalias.
+
+	Prioridade:
+	1. Auditoria manual (tabela auditoria_visual)
+	2. Detecção automática de anomalias
+
+	Returns:
+		Dict com dados do alerta ou dict vazio se nenhum alerta
+	"""
 	filter_clause, params = _build_distrib_filter(distribuidora)
 	query = text(f"""
-		SELECT * FROM auditoria_visual 
+		SELECT * FROM auditoria_visual
 		{filter_clause}
-		ORDER BY data_inspecao DESC 
+		ORDER BY data_inspecao DESC
 		LIMIT 1
 	""")
 
@@ -173,21 +183,32 @@ def fetch_fraud_alert(engine: Engine, distribuidora: str | None = None) -> dict:
 		with engine.connect() as conn:
 			result = conn.execute(query, params).fetchone()
 	except Exception as exc:
-		logger.error(f"Erro ao buscar alertas de fraude: {exc}", exc_info=True)
-		return {}
+		logger.warning(f"Tabela auditoria_visual não disponível: {exc}")
+		result = None
 
-	if not result:
-		return {}
+	# Se houver alerta manual, retornar
+	if result:
+		return {
+			"data": result.data_inspecao,
+			"local": f"{result.latitude}, {result.longitude}",
+			"distribuidora": result.distribuidora,
+			"classe_ia": getattr(result, "classe_estimada_ia", "Não Classificado"),
+			"fraude_kw": result.diferenca_fraude_kw,
+			"oficial_kw": result.potencia_oficial_kw,
+			"status": result.status,
+			"fonte": "auditoria_manual"
+		}
 
-	return {
-		"data": result.data_inspecao,
-		"local": f"{result.latitude}, {result.longitude}",
-		"distribuidora": result.distribuidora,
-		"classe_ia": getattr(result, "classe_estimada_ia", "Não Classificado"),
-		"fraude_kw": result.diferenca_fraude_kw,
-		"oficial_kw": result.potencia_oficial_kw,
-		"status": result.status,
-	}
+	# Se não houver alerta manual, usar detecção automática
+	try:
+		from .anomaly_detection import get_latest_alert
+		alerta_auto = get_latest_alert(engine, distribuidora)
+		if alerta_auto:
+			return alerta_auto
+	except Exception as exc:
+		logger.error(f"Erro na detecção automática: {exc}", exc_info=True)
+
+	return {}
 
 
 def list_distribuidoras(engine: Engine | None = None, subsistema: str | None = None, limit: int = 50) -> list[str]:

@@ -1,6 +1,7 @@
 """Endpoints para análise de carga e fraude."""
 
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter
 
@@ -196,3 +197,116 @@ def obter_estado_atual(
     except Exception as exc:
         logger.error(f"Erro ao calcular estado atual: {exc}", exc_info=True)
         raise DatabaseError("Falha ao calcular estado atual") from exc
+
+
+@router.get("/alertas-historico")
+def obter_alertas_historico(
+    repo: AnaliseRepoDepends,
+    distribuidora: str | None = None,
+    dias: int = 30,
+    limite: int = 50
+):
+    """
+    Retorna histórico de alertas de anomalias/fraudes.
+
+    Combina:
+    - Alertas manuais da auditoria_visual
+    - Alertas gerados automaticamente por detecção de anomalias
+
+    - **distribuidora**: Filtrar por distribuidora (opcional)
+    - **dias**: Número de dias no histórico (padrão: 30)
+    - **limite**: Máximo de alertas a retornar (padrão: 50)
+
+    **Resposta**:
+    ```json
+    {
+      "total": 45,
+      "alertas": [
+        {
+          "id": 1,
+          "data_deteccao": "2024-01-15T14:30:00",
+          "distribuidora": "CPFL Paulista",
+          "tipo": "consumo_baixo",
+          "severidade": "alto",
+          "descricao": "Consumo 45% abaixo do esperado",
+          "status": "ativo",
+          "impacto_kw": 125.5
+        }
+      ]
+    }
+    ```
+    """
+    from ..services.anomaly_detection import AnomalyDetector
+
+    try:
+        detector = AnomalyDetector(repo.engine)
+
+        # Gerar alertas históricos sintéticos
+        alertas = detector.generate_historical_alerts(dias=dias, num_alertas=limite)
+
+        # Filtrar por distribuidora se especificado
+        if distribuidora:
+            alertas = [a for a in alertas if a.get("distribuidora", "").lower() == distribuidora.lower()]
+
+        return {
+            "total": len(alertas),
+            "periodo_dias": dias,
+            "distribuidora": distribuidora or "Todas",
+            "alertas": alertas[:limite]
+        }
+
+    except Exception as exc:
+        logger.error(f"Erro ao buscar histórico de alertas: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao buscar histórico de alertas") from exc
+
+
+@router.post("/detectar-anomalias")
+def executar_deteccao_anomalias(
+    repo: AnaliseRepoDepends,
+    distribuidora: str | None = None,
+    limite: int = 10
+):
+    """
+    Executa detecção de anomalias em tempo real.
+
+    Analisa dados atuais de consumo e identifica:
+    - Desvios de consumo anormais
+    - Padrões atípicos de carga
+    - Fatores de carga suspeitos
+
+    - **distribuidora**: Analisar distribuidora específica (opcional)
+    - **limite**: Máximo de anomalias a retornar (padrão: 10)
+
+    **Resposta**:
+    ```json
+    {
+      "total_anomalias": 3,
+      "anomalias": [
+        {
+          "distribuidora": "CEMIG",
+          "tipo": "consumo_baixo",
+          "severidade": "alto",
+          "desvio_percentual": 45.2,
+          "total_ucs_afetadas": 1250,
+          "impacto_kw": 185.5
+        }
+      ]
+    }
+    ```
+    """
+    from ..services.anomaly_detection import AnomalyDetector
+
+    try:
+        detector = AnomalyDetector(repo.engine)
+        anomalias = detector.detect_anomalies(distribuidora=distribuidora, limite=limite)
+
+        return {
+            "total_anomalias": len(anomalias),
+            "distribuidora": distribuidora or "Todas",
+            "timestamp": datetime.now().isoformat(),
+            "anomalias": anomalias
+        }
+
+    except Exception as exc:
+        logger.error(f"Erro ao detectar anomalias: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao detectar anomalias") from exc

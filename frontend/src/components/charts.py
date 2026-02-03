@@ -511,3 +511,115 @@ def render_perfis_carga(client: ApiClient, classes: Optional[list[str]] = None) 
                 "Fator": perfil["curva"]
             })
             st.dataframe(df_perfil.T, use_container_width=True)
+
+
+def render_classes_consumo_compact(client: ApiClient, distribuidora: str) -> None:
+    """
+    Versão compacta do componente de classes de consumo.
+    Ideal para uso em layouts lado a lado (sem header grande).
+    """
+    result = client.get("/analise/classes-consumo", params={"distribuidora": distribuidora})
+    if result.error:
+        st.error(f"Erro ao carregar classes: {result.error}")
+        return
+
+    if not result.data:
+        st.info("Sem dados de classes disponíveis")
+        return
+
+    df_classes = pd.DataFrame(result.data)
+    if df_classes.empty:
+        st.info("Sem dados de classes disponíveis")
+        return
+
+    # Gráfico de pizza (maior destaque)
+    fig_pie = px.pie(
+        df_classes,
+        values="mw",
+        names="classe",
+        hole=0.4,
+        title="Distribuição por Classe"
+    )
+    fig_pie.update_layout(
+        template="plotly_dark",
+        separators=",.",
+        height=350,
+        showlegend=True,
+        legend=dict(orientation="v", yanchor="middle", y=0.5)
+    )
+    apply_plotly_locale(fig_pie)
+    st.plotly_chart(fig_pie, use_container_width=True)
+
+    # Tabela compacta
+    with st.expander("📊 Ver detalhes"):
+        st.dataframe(df_classes, use_container_width=True, hide_index=True)
+
+
+def render_estabelecimentos_compact(client: ApiClient, distribuidora: str) -> None:
+    """
+    Versão compacta do componente de estabelecimentos.
+    Ideal para uso em layouts lado a lado (sem header grande).
+    """
+    result_resumo = client.get("/analise/estabelecimentos/resumo", params={"distribuidora": distribuidora})
+    result_contagem = client.get("/analise/estabelecimentos/contagem", params={"distribuidora": distribuidora})
+
+    if result_resumo.error or result_contagem.error:
+        st.error("Erro ao carregar estabelecimentos")
+        return
+
+    if not result_resumo.data or not result_contagem.data:
+        st.info("Sem dados de estabelecimentos disponíveis")
+        return
+
+    resumo = result_resumo.data
+    contagens = result_contagem.data
+
+    # Métricas compactas (2x2)
+    col1, col2 = st.columns(2)
+    col1.metric(
+        "Total Instalações",
+        format_integer(resumo['total_instalacoes']),
+        help="Número total de instalações MMGD"
+    )
+    col2.metric(
+        "Potência Total",
+        format_mw(resumo['total_mw'], decimals=0),
+        help="Capacidade instalada total"
+    )
+
+    df_contagens = pd.DataFrame(contagens)
+
+    # Mapear labels
+    tipo_labels = {
+        "residencia": "Residências",
+        "predio_residencial": "Prédios Resid.",
+        "comercio": "Comércios",
+        "predio_comercial": "Prédios Comer.",
+        "industria": "Indústrias",
+        "outro": "Outros"
+    }
+    df_contagens["tipo_label"] = df_contagens["tipo"].map(tipo_labels)
+
+    # Gráfico de pizza (potência)
+    fig_mw = px.pie(
+        df_contagens,
+        values="total_mw",
+        names="tipo_label",
+        title="Distribuição por Tipo",
+        hole=0.4
+    )
+    fig_mw.update_layout(
+        template="plotly_dark",
+        separators=",.",
+        height=350,
+        showlegend=True,
+        legend=dict(orientation="v", yanchor="middle", y=0.5)
+    )
+    apply_plotly_locale(fig_mw)
+    st.plotly_chart(fig_mw, use_container_width=True)
+
+    # Tabela detalhada
+    with st.expander("📊 Ver detalhes"):
+        df_display = df_contagens[["tipo_label", "quantidade", "total_unidades", "total_mw"]].copy()
+        df_display.columns = ["Tipo", "Instalações", "UCs", "MW"]
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
