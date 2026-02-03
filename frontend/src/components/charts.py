@@ -7,6 +7,15 @@ import streamlit as st
 
 from services.api_client import ApiClient
 from utils.errors import show_error
+from utils.formatters import (
+    format_mw,
+    format_kw,
+    format_wm2,
+    format_integer,
+    format_percentage,
+    format_factor,
+    apply_plotly_locale
+)
 
 
 def load_carga_data(client: ApiClient, subsistema: str, distribuidora: str) -> pd.DataFrame:
@@ -34,81 +43,215 @@ def render_carga_section(
     multiplicador: int,
     subsistema: str,
 ) -> None:
-    st.header(f"Curva de Carga Líquida ({subsistema})")
+    """
+    Renderiza gráfico comparativo de cargas mostrando a separação entre:
+    - Carga Líquida (ONS): O que o sistema de transmissão "vê"
+    - Geração MMGD: Produção solar/eólica distribuída
+    - Consumo Real: Demanda total = Carga Líquida + MMGD
+
+    Args:
+        df_carga: DataFrame com dados de carga (colunas: hora, carga_ons, estimativa_solar_mw, carga_real_estimada)
+        impacto_projecao_mw: Impacto estimado de fraudes (opcional)
+        multiplicador: Fator multiplicador para projeção de fraudes
+        subsistema: Nome do subsistema elétrico
+    """
+    st.header(f"Análise de Carga: Líquida vs Real ({subsistema})")
 
     if df_carga.empty:
         st.info("Sem dados de carga para o período selecionado.")
         return
 
+    # Calcular carga auditada se houver projeção de fraude
     if impacto_projecao_mw > 0:
         df_carga["carga_auditada"] = df_carga["carga_real_estimada"] + impacto_projecao_mw
 
+    # ===== MÉTRICAS PRINCIPAIS =====
     col1, col2, col3, col4 = st.columns(4)
 
-    carga_atual = df_carga.iloc[-1]["carga_ons"]
-    oculta_oficial = df_carga.iloc[-1]["estimativa_solar_mw"]
+    # Valores atuais (última leitura)
+    carga_liquida_atual = df_carga.iloc[-1]["carga_ons"]
+    geracao_mmgd_atual = df_carga.iloc[-1]["estimativa_solar_mw"]
+    consumo_real_atual = df_carga.iloc[-1]["carga_real_estimada"]
+
+    # Estatísticas diárias
     pico_solar_dia = df_carga["estimativa_solar_mw"].max()
     hora_pico = df_carga.loc[df_carga["estimativa_solar_mw"].idxmax(), "hora"].strftime("%Hh")
 
-    col1.metric("Carga Rede (ONS)", f"{carga_atual:,.0f} MW")
-    col2.metric("MMGD Distribuída (Agora)", f"{oculta_oficial:,.0f} MW", delta="Oficial")
+    col1.metric(
+        "⚡ Carga Líquida (ONS)",
+        format_mw(carga_liquida_atual, decimals=0),
+        help="Carga medida pelo ONS nos pontos de entrega (transmissão)"
+    )
+    col2.metric(
+        "🏭 Geração MMGD (Agora)",
+        format_mw(geracao_mmgd_atual, decimals=0),
+        help="Geração distribuída (painéis solares, mini-usinas)"
+    )
+    col3.metric(
+        "🔌 Consumo Real (Estimado)",
+        format_mw(consumo_real_atual, decimals=0),
+        help="Demanda total = Carga Líquida + MMGD"
+    )
+    col4.metric(
+        f"☀️ Pico Solar (às {hora_pico})",
+        format_mw(pico_solar_dia, decimals=0),
+        help="Máxima geração MMGD no dia"
+    )
 
-    if impacto_projecao_mw > 0:
-        col3.metric(
-            "Carga Auditada (IA)",
-            f"{oculta_oficial + impacto_projecao_mw:,.0f} MW",
-            delta="RISCO",
-            delta_color="inverse",
-        )
-    else:
-        col3.metric("Carga Auditada", "Sem desvios")
+    # ===== TOOLTIP EDUCATIVO =====
+    with st.expander("ℹ️ Entenda os conceitos"):
+        st.markdown("""
+        ### Conceitos Fundamentais
 
-    col4.metric(f"Pico Solar (às {hora_pico})", f"{pico_solar_dia:,.0f} MW", delta="Atividade Solar")
+        #### 🔵 Carga Líquida (ONS)
+        - **O que é**: Medida nos pontos de entrega do sistema de transmissão
+        - **O que inclui**: Energia fornecida pela rede (usinas + transmissão)
+        - **O que NÃO inclui**: Geração distribuída (MMGD) consumida localmente
+        - **Quem mede**: Operador Nacional do Sistema (ONS)
 
+        #### 🟡 Geração MMGD (Micro e Minigeração Distribuída)
+        - **O que é**: Painéis solares e pequenas usinas no ponto de consumo
+        - **Capacidade**: Até 5 MW (mini) ou até 75 kW (micro)
+        - **Características**: Geram energia consumida localmente, não passa pela transmissão
+        - **Impacto**: Durante o dia, reduzem a carga vista pelo ONS
+
+        #### 🟢 Consumo Real (Estimado)
+        - **O que é**: Demanda TOTAL de energia pelos consumidores
+        - **Fórmula**: Consumo Real = Carga Líquida ONS + Geração MMGD
+        - **Inclui**: Energia da rede + energia da MMGD local
+        - **Relevância**: Representa a demanda real que precisa ser atendida
+
+        #### 📊 "Carga Oculta"
+        - **O que é**: Diferença entre consumo real e carga líquida
+        - **Valor**: Igual à geração MMGD
+        - **Por que "oculta"**: Está "escondida" do ONS (não passa pela transmissão)
+
+        ---
+
+        **Exemplo prático às 12h (pico solar):**
+        - Consumo Real: **100 MW** (o que os consumidores realmente usam)
+        - Geração MMGD: **30 MW** (painéis solares gerando)
+        - Carga Líquida ONS: **70 MW** (100 - 30 = o que vem da rede)
+
+        O ONS só "vê" 70 MW, mas o consumo real é 100 MW.
+        """)
+
+    # ===== GRÁFICO COMPARATIVO =====
     fig = go.Figure()
+
+    # Trace 1: Carga Líquida ONS (azul escuro, área preenchida)
     fig.add_trace(
         go.Scatter(
             x=df_carga["hora"],
             y=df_carga["carga_ons"],
             mode="lines",
-            name="Carga Rede (ONS)",
-            line=dict(color="#00BFFF", width=3),
+            name="Carga Líquida (ONS)",
+            line=dict(color="#1e3a8a", width=3),  # Azul escuro
             fill="tozeroy",
+            fillcolor="rgba(30, 58, 138, 0.3)",
+            hovertemplate=(
+                "<b>Carga Líquida (ONS)</b><br>"
+                "Hora: %{x}<br>"
+                "Carga: %{y:.0f} MW<br>"
+                "<extra></extra>"
+            )
         )
     )
+
+    # Trace 2: Geração MMGD (amarelo, área preenchida acima da carga líquida)
     fig.add_trace(
         go.Scatter(
             x=df_carga["hora"],
             y=df_carga["carga_real_estimada"],
-            mode="lines",
-            name="Consumo Real (ANEEL)",
-            line=dict(color="#FFA500", width=2, dash="dot"),
+            mode="none",
+            name="Geração MMGD",
+            fill="tonexty",  # Preenche entre carga_ons e carga_real
+            fillcolor="rgba(250, 204, 21, 0.5)",  # Amarelo translúcido
+            hovertemplate=(
+                "<b>Geração MMGD</b><br>"
+                "Hora: %{x}<br>"
+                "Geração: %{customdata:.0f} MW<br>"
+                "<extra></extra>"
+            ),
+            customdata=df_carga["estimativa_solar_mw"]
         )
     )
 
+    # Trace 3: Linha do Consumo Real (verde, borda superior)
+    fig.add_trace(
+        go.Scatter(
+            x=df_carga["hora"],
+            y=df_carga["carga_real_estimada"],
+            mode="lines+markers",
+            name="Consumo Real (Estimado)",
+            line=dict(color="#16a34a", width=3, dash="solid"),  # Verde
+            marker=dict(size=5, color="#16a34a"),
+            hovertemplate=(
+                "<b>Consumo Real</b><br>"
+                "Hora: %{x}<br>"
+                "Consumo: %{y:.0f} MW<br>"
+                "<extra></extra>"
+            )
+        )
+    )
+
+    # Trace 4 (opcional): Carga Auditada com fraudes
     if impacto_projecao_mw > 0 and "carga_auditada" in df_carga.columns:
         fig.add_trace(
             go.Scatter(
                 x=df_carga["hora"],
                 y=df_carga["carga_auditada"],
                 mode="lines",
-                name=f"Cenário Projetado ({multiplicador}x)",
-                line=dict(color="#FF0000", width=2, dash="dashdot"),
-            )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=df_carga["hora"],
-                y=df_carga["carga_auditada"],
-                fill="tonexty",
-                fillcolor="rgba(255, 0, 0, 0.3)",
-                name="Carga Fantasma",
-                mode="none",
+                name=f"Cenário com Fraudes ({multiplicador}x)",
+                line=dict(color="#dc2626", width=2, dash="dash"),  # Vermelho
+                hovertemplate=(
+                    "<b>Cenário com Fraudes</b><br>"
+                    "Hora: %{x}<br>"
+                    "Carga: %{y:.0f} MW<br>"
+                    "<extra></extra>"
+                )
             )
         )
 
-    fig.update_layout(height=450, template="plotly_dark", title="Impacto das Fraudes na Curva de Carga")
+    # Layout do gráfico
+    fig.update_layout(
+        title={
+            "text": "Comparativo: Carga Líquida vs Consumo Real",
+            "x": 0.5,
+            "xanchor": "center"
+        },
+        xaxis_title="Data/Hora",
+        yaxis_title="Potência Média (MW)",
+        template="plotly_dark",
+        hovermode="x unified",
+        height=500,
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.25,
+            xanchor="center",
+            x=0.5
+        ),
+        separators=",.",
+        yaxis=dict(
+            ticksuffix=" MW",
+            rangemode="tozero"
+        )
+    )
+
+    apply_plotly_locale(fig)
     st.plotly_chart(fig, use_container_width=True)
+
+    # ===== LEGENDA VISUAL EXPLICATIVA =====
+    st.markdown("""
+    **Legenda do Gráfico:**
+    - 🔵 **Área Azul**: Carga Líquida (o que o sistema de transmissão fornece)
+    - 🟡 **Área Amarela**: Geração MMGD (energia gerada e consumida localmente)
+    - 🟢 **Linha Verde**: Consumo Real Total (Carga Líquida + MMGD)
+
+    A área amarela representa a "carga oculta" - energia que os consumidores usam mas o ONS não vê.
+    """)
 
 
 def render_classes_consumo(client: ApiClient, distribuidora: str) -> None:
@@ -131,7 +274,8 @@ def render_classes_consumo(client: ApiClient, distribuidora: str) -> None:
         st.dataframe(df_classes, use_container_width=True, hide_index=True)
     with c2:
         fig_pie = px.pie(df_classes, values="mw", names="classe", hole=0.4, title="Perfil de Consumo")
-        fig_pie.update_layout(template="plotly_dark")
+        fig_pie.update_layout(template="plotly_dark", separators=",.")
+        apply_plotly_locale(fig_pie)
         st.plotly_chart(fig_pie, use_container_width=True)
 
 
@@ -155,10 +299,10 @@ def render_estabelecimentos_section(client: ApiClient, distribuidora: str) -> No
 
     # Métricas principais
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Instalações MMGD", f"{resumo['total_instalacoes']:,}")
-    col2.metric("Unidades Consumidoras (UC)", f"{resumo['total_unidades_consumidoras']:,}")
-    col3.metric("Potência Total", f"{resumo['total_mw']:,.0f} MW")
-    col4.metric("Média por UC", f"{resumo['total_mw'] / resumo['total_unidades_consumidoras'] * 1000:.1f} kW")
+    col1.metric("Total Instalações MMGD", format_integer(resumo['total_instalacoes']))
+    col2.metric("Unidades Consumidoras (UC)", format_integer(resumo['total_unidades_consumidoras']))
+    col3.metric("Potência Total", format_mw(resumo['total_mw'], decimals=0))
+    col4.metric("Média por UC", format_kw(resumo['total_mw'] / resumo['total_unidades_consumidoras'] * 1000, decimals=1))
 
     df_contagens = pd.DataFrame(contagens)
 
@@ -185,7 +329,8 @@ def render_estabelecimentos_section(client: ApiClient, distribuidora: str) -> No
             title="Número de Instalações",
             hole=0.4
         )
-        fig_qty.update_layout(template="plotly_dark")
+        fig_qty.update_layout(template="plotly_dark", separators=",.")
+        apply_plotly_locale(fig_qty)
         st.plotly_chart(fig_qty, use_container_width=True)
 
     with col_right:
@@ -197,7 +342,8 @@ def render_estabelecimentos_section(client: ApiClient, distribuidora: str) -> No
             title="Capacidade Instalada (%)",
             hole=0.4
         )
-        fig_mw.update_layout(template="plotly_dark")
+        fig_mw.update_layout(template="plotly_dark", separators=",.")
+        apply_plotly_locale(fig_mw)
         st.plotly_chart(fig_mw, use_container_width=True)
 
     # Tabela detalhada
@@ -205,3 +351,163 @@ def render_estabelecimentos_section(client: ApiClient, distribuidora: str) -> No
     df_display = df_contagens[["tipo_label", "quantidade", "total_unidades", "total_mw"]].copy()
     df_display.columns = ["Tipo", "Instalações", "Unidades Consumidoras (UC)", "Potência (MW)"]
     st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+
+def render_perfis_carga(client: ApiClient, classes: Optional[list[str]] = None) -> None:
+    """
+    Renderiza gráfico de perfis de carga típicos por classe de consumo.
+
+    Args:
+        client: Cliente da API
+        classes: Lista de classes a exibir. Se None, exibe todas.
+    """
+    st.header("Perfis de Carga por Classe de Consumo")
+
+    # Info explicativa
+    with st.expander("ℹ️ O que são perfis de carga?"):
+        st.markdown("""
+        **Perfis de carga** são curvas horárias que representam o padrão típico de consumo
+        de energia ao longo do dia para cada classe de consumidor.
+
+        - **Fatores normalizados**: Os valores são fatores multiplicativos com média = 1.0
+        - **Para obter MW/kW**: Multiplique o fator pelo consumo médio da classe
+        - **Baseado em estudos**: EPE (Empresa de Pesquisa Energética) e ANEEL
+
+        **Características por classe:**
+        - 🏠 **Residencial**: Pico noturno (18h-22h) - retorno do trabalho, jantar, lazer
+        - 🏢 **Comercial**: Pico diurno (9h-18h) - horário comercial
+        - 🏭 **Industrial**: Perfil mais plano - operação contínua (3 turnos)
+        - 🌾 **Rural**: Dois picos - matinal (5h-7h) e vespertino (17h-19h)
+        - 🏛️ **Poder Público**: Similar ao comercial com iluminação pública noturna
+        """)
+
+    # Seletor de classes
+    todas_classes = ["residencial", "comercial", "industrial", "rural", "poder_publico"]
+    classes_labels = {
+        "residencial": "🏠 Residencial",
+        "comercial": "🏢 Comercial",
+        "industrial": "🏭 Industrial",
+        "rural": "🌾 Rural",
+        "poder_publico": "🏛️ Poder Público"
+    }
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        if classes is None:
+            classes_selecionadas = st.multiselect(
+                "Selecione as classes para comparar:",
+                options=todas_classes,
+                default=["residencial", "comercial", "industrial"],
+                format_func=lambda x: classes_labels.get(x, x)
+            )
+        else:
+            classes_selecionadas = classes
+
+    if not classes_selecionadas:
+        st.warning("Selecione pelo menos uma classe para visualizar o perfil.")
+        return
+
+    # Buscar dados da API
+    params = {"classes": ",".join(classes_selecionadas)}
+    result = client.get("/analise/perfis-carga", params=params)
+
+    if result.error:
+        show_error(result.error)
+        return
+
+    if not result.data or not result.data.get("perfis"):
+        st.warning("Nenhum perfil encontrado.")
+        return
+
+    perfis = result.data["perfis"]
+
+    # Cores por classe
+    cores = {
+        "residencial": "#1f77b4",  # Azul
+        "comercial": "#ff7f0e",    # Laranja
+        "industrial": "#2ca02c",   # Verde
+        "rural": "#d62728",        # Vermelho
+        "poder_publico": "#9467bd" # Roxo
+    }
+
+    # Criar gráfico
+    fig = go.Figure()
+
+    for perfil in perfis:
+        classe = perfil["classe"]
+        curva = perfil["curva"]
+        horas = list(range(24))
+
+        fig.add_trace(go.Scatter(
+            x=horas,
+            y=curva,
+            mode='lines+markers',
+            name=classes_labels.get(classe, classe.title()),
+            line=dict(
+                color=cores.get(classe, "#888888"),
+                width=3
+            ),
+            marker=dict(size=6),
+            hovertemplate=(
+                f"<b>{classes_labels.get(classe, classe.title())}</b><br>"
+                "Hora: %{x}h<br>"
+                "Fator: %{y:.2f} p.u.<br>"
+                "<extra></extra>"
+            )
+        ))
+
+    # Layout do gráfico
+    fig.update_layout(
+        title="Curvas de Carga Típicas por Classe de Consumo",
+        xaxis_title="Hora do Dia",
+        yaxis_title="Fator de Carga (p.u.)",
+        template="plotly_dark",
+        hovermode="x unified",
+        height=500,
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        separators=",.",
+        xaxis=dict(
+            tickmode='linear',
+            tick0=0,
+            dtick=2,
+            ticksuffix="h",
+            range=[-0.5, 23.5]
+        ),
+        yaxis=dict(
+            range=[0, max([max(p["curva"]) for p in perfis]) * 1.1]
+        )
+    )
+
+    apply_plotly_locale(fig)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Métricas de cada perfil
+    st.subheader("Características dos Perfis")
+
+    cols = st.columns(len(perfis))
+    for idx, perfil in enumerate(perfis):
+        with cols[idx]:
+            classe = perfil["classe"]
+            st.markdown(f"**{classes_labels.get(classe, classe.title())}**")
+            st.metric("Hora de Pico", f"{perfil['hora_pico']}h")
+            st.metric("Fator no Pico", format_factor(perfil['fator_pico']))
+            st.metric("Hora de Vale", f"{perfil['hora_vale']}h")
+            st.metric("Fator no Vale", format_factor(perfil['fator_vale']))
+            st.metric("Amplitude", format_factor(perfil['amplitude']))
+
+    # Tabela de dados
+    with st.expander("📊 Ver dados tabulares"):
+        for perfil in perfis:
+            st.markdown(f"**{classes_labels.get(perfil['classe'], perfil['classe'].title())}**")
+            df_perfil = pd.DataFrame({
+                "Hora": [f"{h}h" for h in range(24)],
+                "Fator": perfil["curva"]
+            })
+            st.dataframe(df_perfil.T, use_container_width=True)

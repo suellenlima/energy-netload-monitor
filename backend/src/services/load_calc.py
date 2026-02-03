@@ -18,6 +18,55 @@ def calculate_hidden_load(
 	subsistema: str = "SUDESTE",
 	distribuidora: str | None = None,
 ) -> list[dict]:
+	"""
+	Calcula a separação entre carga líquida e consumo real.
+
+	CONCEITOS FUNDAMENTAIS:
+	=======================
+
+	1. CARGA LÍQUIDA (ONS):
+	   - Medida nos pontos de entrega do sistema de transmissão
+	   - NÃO inclui a geração distribuída (MMGD) consumida localmente
+	   - É o que o ONS "enxerga" e registra oficialmente
+	   - Fórmula: Carga_Líquida = Consumo_Real - Geração_MMGD_Injetada
+
+	2. GERAÇÃO MMGD (Micro e Minigeração Distribuída):
+	   - Painéis solares e pequenas usinas no ponto de consumo
+	   - Geram energia que é consumida localmente (não passa pela transmissão)
+	   - Durante o dia, reduzem a carga vista pelo ONS
+	   - Fórmula: Geração(h) = Potência_Instalada × Fator_Capacidade(h) × Eficiência
+
+	3. CONSUMO REAL (Estimado):
+	   - Demanda TOTAL de energia pelos consumidores
+	   - Inclui o que vem da rede + o que vem da MMGD local
+	   - Fórmula: Consumo_Real = Carga_Líquida_ONS + Geração_MMGD
+
+	4. "CARGA OCULTA":
+	   - Diferença entre consumo real e carga líquida
+	   - É a energia da MMGD que está "escondida" do ONS
+	   - Carga_Oculta = Geração_MMGD
+
+	EXEMPLO NUMÉRICO:
+	=================
+	Hora: 12h (pico solar)
+	- Consumo Real: 100 MW (o que os consumidores realmente usam)
+	- Geração MMGD: 30 MW (painéis solares gerando)
+	- Carga Líquida ONS: 70 MW (100 - 30 = o que vem da rede)
+
+	Args:
+		engine: Conexão com banco de dados
+		subsistema: Subsistema elétrico (SUDESTE, SUL, etc)
+		distribuidora: Filtro opcional por distribuidora
+
+	Returns:
+		Lista de dicts com campos:
+		- hora: timestamp
+		- carga_ons: Carga Líquida em MW (medida pelo ONS)
+		- sol_wm2: Irradiância solar em W/m²
+		- sol_wm2_final: Irradiância corrigida (usa perfil se faltante)
+		- estimativa_solar_mw: Geração MMGD estimada em MW
+		- carga_real_estimada: Consumo Real em MW (carga_ons + solar)
+	"""
 	sub_upper = subsistema.upper()
 	sub_simple = "SUDESTE" if "SUDESTE" in sub_upper else sub_upper
 	sub_like = f"%{sub_simple}%"
@@ -25,17 +74,20 @@ def calculate_hidden_load(
 
 	try:
 		with engine.connect() as conn:
+			# Buscar capacidade instalada de MMGD
 			cap_solar_mw = _fetch_capacity(conn, filter_clause, params_cap)
 			if not cap_solar_mw or cap_solar_mw < 10:
+				# Valores padrão se não houver dados
 				cap_solar_mw = 3000.0 if distribuidora else 15000.0
 
+			# Buscar histórico de carga ONS (líquida) e irradiância solar
 			query = text("""
-				SELECT 
+				SELECT
 					ons.time as hora,
 					ons.carga_mw as carga_ons,
 					COALESCE(clima.irradiancia_wm2, 0) as sol_wm2
 				FROM carga_ons ons
-				LEFT JOIN clima_real clima 
+				LEFT JOIN clima_real clima
 					ON date_trunc('hour', ons.time) = date_trunc('hour', clima.time)
 					AND clima.subsistema = :sub_simple
 				WHERE UPPER(ons.subsistema) LIKE :sub_like
@@ -54,9 +106,24 @@ def calculate_hidden_load(
 		return []
 
 	df = _build_hidden_load_dataframe(result)
+
+	# Corrigir irradiância faltante usando perfil solar típico
 	df["sol_wm2_final"] = df.apply(_corrigir_sol, axis=1)
-	df["estimativa_solar_mw"] = (cap_solar_mw * (df["sol_wm2_final"] / 1000) * 0.85).clip(lower=0)
+
+	# Calcular geração MMGD
+	# Fórmula: Geração = Pot_Instalada × (Irradiância/1000) × Eficiência
+	# Onde:
+	#   - Pot_Instalada: capacidade em MW (DC)
+	#   - Irradiância/1000: fator de capacidade (normalizado por 1000 W/m² = STC)
+	#   - 0.85: eficiência do sistema (perdas inversor, cabos, temperatura)
+	df["estimativa_solar_mw"] = (
+		cap_solar_mw * (df["sol_wm2_final"] / 1000.0) * 0.85
+	).clip(lower=0)
+
+	# Calcular consumo real estimado
+	# Fórmula: Consumo_Real = Carga_Líquida_ONS + Geração_MMGD
 	df["carga_real_estimada"] = df["carga_ons"] + df["estimativa_solar_mw"]
+
 	return df.to_dict(orient="records")
 
 
@@ -179,10 +246,41 @@ def _build_hidden_load_dataframe(result) -> pd.DataFrame:
 
 
 def _corrigir_sol(row: pd.Series) -> float:
+	"""
+	Corrige irradiância faltante usando perfil solar típico.
+
+	Quando não há medição de irradiância disponível (sensor offline, falha de rede, etc),
+	esta função estima um valor baseado em perfis típicos de irradiância solar.
+
+	Args:
+		row: Linha do DataFrame com campos 'hora' e 'sol_wm2'
+
+	Returns:
+		Irradiância em W/m² (medida ou estimada)
+
+	Lógica:
+		- Se há medição válida (>10 W/m²): usa valor medido
+		- Se falta medição durante o dia (6h-18h): estima usando perfil típico
+		- Durante a noite: mantém zero
+	"""
 	hora = row["hora"].hour
-	if 6 <= hora <= 18 and row["sol_wm2"] < 10:
-		return np.sin(np.pi * (hora - 6) / 12) * 800
-	return row["sol_wm2"]
+	irradiancia_medida = row["sol_wm2"]
+
+	# Durante o dia (6h-18h), se não há medição válida (< 10 W/m²)
+	if 6 <= hora <= 18 and irradiancia_medida < 10:
+		# Importar perfil solar
+		try:
+			from ..data.solar_profile import get_solar_profile
+			perfil = get_solar_profile("tipico")
+			# Converter fator de capacidade para irradiância (0-1 → 0-1000 W/m²)
+			return perfil[hora] * 1000.0
+		except ImportError:
+			# Fallback: usar função senoidal simples
+			# Pico ao meio-dia (12h), zero ao amanhecer (6h) e pôr do sol (18h)
+			return np.sin(np.pi * (hora - 6) / 12) * 800
+
+	# Usar medição real se disponível
+	return irradiancia_medida
 
 
 def fetch_establishment_counts(engine: Engine, distribuidora: str | None = None) -> list[dict]:
@@ -248,4 +346,57 @@ def fetch_granular_summary(engine: Engine, distribuidora: str | None = None) -> 
 		"total_unidades_consumidoras": int(result.total_unidades or 0),
 		"total_mw": round(result.total_mw or 0, 2),
 		"por_tipo": {item["tipo"]: item for item in counts}
+	}
+
+
+def get_load_profiles(classes: list[str] | None = None) -> dict:
+	"""
+	Retorna os perfis de carga típicos para classes especificadas.
+
+	Args:
+		classes: Lista de classes desejadas. Se None, retorna todas.
+
+	Returns:
+		Dict com perfis e metadados de cada classe.
+	"""
+	try:
+		# Importar módulo de perfis
+		from ..data import load_profiles
+	except ImportError:
+		logger.error("Módulo load_profiles não encontrado")
+		return {"perfis": [], "classes_disponiveis": []}
+
+	# Classes disponíveis no sistema
+	todas_classes = list(load_profiles.PERFIS_TIPICOS.keys())
+
+	# Se nenhuma classe especificada, retornar todas
+	if not classes:
+		classes = todas_classes
+
+	# Validar classes solicitadas
+	classes_validas = [c for c in classes if c.lower() in todas_classes]
+
+	# Buscar metadados
+	metadados = load_profiles.get_profile_metadata()
+
+	# Construir resposta
+	perfis = []
+	for classe in classes_validas:
+		classe_lower = classe.lower()
+		curva = load_profiles.get_profile(classe_lower)
+		meta = metadados[classe_lower]
+
+		perfis.append({
+			"classe": classe_lower,
+			"curva": curva,
+			"hora_pico": meta["hora_pico"],
+			"fator_pico": round(meta["fator_pico"], 2),
+			"hora_vale": meta["hora_vale"],
+			"fator_vale": round(meta["fator_vale"], 2),
+			"amplitude": round(meta["amplitude"], 2)
+		})
+
+	return {
+		"perfis": perfis,
+		"classes_disponiveis": todas_classes
 	}
