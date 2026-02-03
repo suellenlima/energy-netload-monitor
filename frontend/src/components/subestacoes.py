@@ -247,8 +247,6 @@ def render_analise_local_subestacao(client: ApiClient, distribuidora: str | None
     """
     import plotly.graph_objects as go
 
-    st.header("🎯 Análise Local por Subestação")
-
     st.info("""
     **Análise Centrada na Subestação** (FASE 2)
 

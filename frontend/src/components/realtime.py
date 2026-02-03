@@ -37,8 +37,6 @@ def render_realtime_dashboard(
         distribuidora: Distribuidora (opcional)
         auto_refresh: Se True, atualiza automaticamente
     """
-    st.header("⏱️ Monitoramento em Tempo Real")
-
     # Info explicativa
     with st.expander("ℹ️ Como funciona o 'Tempo Real'?"):
         st.markdown("""
