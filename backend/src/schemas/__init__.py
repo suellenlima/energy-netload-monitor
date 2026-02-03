@@ -5,6 +5,8 @@ from .analise import (
     CargaOcultaItem,
     ClasseConsumoItem,
     EstabelecimentoContagem,
+    PerfilCarga,
+    PerfisResponse,
     ResumoGranular,
 )
 from .common import GeoJSONFeature, GeoJSONResponse, QueryParams
@@ -35,4 +37,6 @@ __all__ = [
     "AlertaFraude",
     "EstabelecimentoContagem",
     "ResumoGranular",
+    "PerfilCarga",
+    "PerfisResponse",
 ]

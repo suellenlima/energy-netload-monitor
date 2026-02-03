@@ -266,3 +266,208 @@ def load_detected_subestacoes(df: pd.DataFrame, engine: Engine, logger: logging.
     except Exception as e:
         logger.error(f"Erro ao carregar subestações detectadas: {e}")
         return 0
+
+
+def associate_ucs_to_nearest_subestacao(
+    engine: Engine,
+    raio_km: float = 10.0,
+    origem: str = "detectadas",
+    logger: logging.Logger | None = None
+) -> dict:
+    """
+    Associa cada UC (gd_granular) à subestação mais próxima.
+
+    Args:
+        engine: Engine do SQLAlchemy
+        raio_km: Raio máximo de busca em km
+        origem: 'detectadas', 'ons' ou 'ambas'
+        logger: Logger para mensagens
+
+    Returns:
+        Dict com estatísticas da associação
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    logger.info(f"Associando UCs à subestação mais próxima (raio: {raio_km}km)")
+
+    try:
+        # Determinar tabela de subestações
+        tabela_subestacao = {
+            "detectadas": "subestacoes_detectadas",
+            "ons": "subestacoes_ons",
+            "ambas": "subestacoes_detectadas"  # Prioriza detectadas
+        }.get(origem, "subestacoes_detectadas")
+
+        # Query para associação espacial
+        query = text(f"""
+            WITH distancias AS (
+                SELECT
+                    g.id as uc_id,
+                    s.id as subestacao_id,
+                    ST_Distance(g.geom::geography, s.geom::geography) / 1000.0 as distancia_km,
+                    ROW_NUMBER() OVER (PARTITION BY g.id ORDER BY ST_Distance(g.geom::geography, s.geom::geography)) as rn
+                FROM gd_granular g
+                CROSS JOIN {tabela_subestacao} s
+                WHERE g.geom IS NOT NULL
+                  AND s.geom IS NOT NULL
+                  AND ST_DWithin(g.geom::geography, s.geom::geography, :raio_metros)
+            )
+            UPDATE gd_granular
+            SET subestacao_id = d.subestacao_id
+            FROM distancias d
+            WHERE gd_granular.id = d.uc_id
+              AND d.rn = 1
+            RETURNING gd_granular.id;
+        """)
+
+        with engine.begin() as conn:
+            result = conn.execute(query, {"raio_metros": raio_km * 1000})
+            ucs_associadas = result.rowcount
+
+        # Buscar estatísticas
+        stats_query = text("""
+            SELECT
+                COUNT(*) FILTER (WHERE subestacao_id IS NOT NULL) as ucs_associadas,
+                COUNT(*) FILTER (WHERE subestacao_id IS NULL AND geom IS NOT NULL) as ucs_sem_subestacao,
+                COUNT(*) FILTER (WHERE geom IS NULL) as ucs_sem_coordenadas,
+                COUNT(*) as total_ucs
+            FROM gd_granular
+        """)
+
+        with engine.connect() as conn:
+            stats = conn.execute(stats_query).fetchone()
+
+        resultado = {
+            "ucs_associadas": int(stats.ucs_associadas or 0),
+            "ucs_sem_subestacao": int(stats.ucs_sem_subestacao or 0),
+            "ucs_sem_coordenadas": int(stats.ucs_sem_coordenadas or 0),
+            "total_ucs": int(stats.total_ucs or 0),
+            "percentual_associado": round(
+                (stats.ucs_associadas / stats.total_ucs * 100) if stats.total_ucs > 0 else 0,
+                2
+            ),
+            "raio_km": raio_km,
+            "origem": origem
+        }
+
+        logger.info(
+            f"Associação concluída: {resultado['ucs_associadas']}/{resultado['total_ucs']} UCs "
+            f"({resultado['percentual_associado']}%)"
+        )
+
+        return resultado
+
+    except Exception as exc:
+        logger.error(f"Erro ao associar UCs: {exc}", exc_info=True)
+        return {
+            "ucs_associadas": 0,
+            "error": str(exc)
+        }
+
+
+def get_uc_mix_by_subestacao(
+    engine: Engine,
+    subestacao_id: int,
+    logger: logging.Logger | None = None
+) -> dict:
+    """
+    Retorna o mix de unidades consumidoras por subestação.
+
+    Args:
+        engine: Engine do SQLAlchemy
+        subestacao_id: ID da subestação
+        logger: Logger
+
+    Returns:
+        Dict com mix por classe e tipo de estabelecimento
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    logger.info(f"Buscando mix de UCs para subestação {subestacao_id}")
+
+    query = text("""
+        SELECT
+            classe_consumo,
+            tipo_estabelecimento,
+            COUNT(*) as qtd_instalacoes,
+            SUM(qtd_unidades) as qtd_unidades_consumidoras,
+            SUM(potencia_kw) / 1000.0 as potencia_total_mw
+        FROM gd_granular
+        WHERE subestacao_id = :subestacao_id
+        GROUP BY classe_consumo, tipo_estabelecimento
+        ORDER BY potencia_total_mw DESC
+    """)
+
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(query, {"subestacao_id": subestacao_id})
+            rows = result.fetchall()
+
+        if not rows:
+            return {
+                "subestacao_id": subestacao_id,
+                "mix": {},
+                "totais": {
+                    "qtd_instalacoes": 0,
+                    "qtd_unidades_consumidoras": 0,
+                    "potencia_total_mw": 0.0
+                }
+            }
+
+        # Agrupar por classe
+        mix_por_classe = {}
+        totais = {
+            "qtd_instalacoes": 0,
+            "qtd_unidades_consumidoras": 0,
+            "potencia_total_mw": 0.0
+        }
+
+        for row in rows:
+            classe = row.classe_consumo
+            if classe not in mix_por_classe:
+                mix_por_classe[classe] = {
+                    "qtd_instalacoes": 0,
+                    "qtd_unidades_consumidoras": 0,
+                    "potencia_total_mw": 0.0,
+                    "por_tipo": {}
+                }
+
+            tipo = row.tipo_estabelecimento
+            mix_por_classe[classe]["por_tipo"][tipo] = {
+                "qtd_instalacoes": int(row.qtd_instalacoes),
+                "qtd_unidades_consumidoras": int(row.qtd_unidades_consumidoras),
+                "potencia_total_mw": round(float(row.potencia_total_mw), 3)
+            }
+
+            # Acumular totais por classe
+            mix_por_classe[classe]["qtd_instalacoes"] += int(row.qtd_instalacoes)
+            mix_por_classe[classe]["qtd_unidades_consumidoras"] += int(row.qtd_unidades_consumidoras)
+            mix_por_classe[classe]["potencia_total_mw"] += float(row.potencia_total_mw)
+
+            # Acumular totais gerais
+            totais["qtd_instalacoes"] += int(row.qtd_instalacoes)
+            totais["qtd_unidades_consumidoras"] += int(row.qtd_unidades_consumidoras)
+            totais["potencia_total_mw"] += float(row.potencia_total_mw)
+
+        # Arredondar totais por classe
+        for classe in mix_por_classe:
+            mix_por_classe[classe]["potencia_total_mw"] = round(
+                mix_por_classe[classe]["potencia_total_mw"], 3
+            )
+
+        totais["potencia_total_mw"] = round(totais["potencia_total_mw"], 3)
+
+        return {
+            "subestacao_id": subestacao_id,
+            "mix": mix_por_classe,
+            "totais": totais
+        }
+
+    except Exception as exc:
+        logger.error(f"Erro ao buscar mix de UCs: {exc}", exc_info=True)
+        return {
+            "subestacao_id": subestacao_id,
+            "error": str(exc)
+        }
