@@ -355,3 +355,139 @@ def get_areas_statistics(engine: EngineDepends):
     except Exception as exc:
         logger.error(f"Erro ao buscar estatísticas de áreas: {exc}", exc_info=True)
         raise DatabaseError(str(exc))
+@router.post("/associar-ucs")
+def associar_ucs_a_subestacoes(
+    engine: EngineDepends,
+    raio_km: float = Query(10.0, description="Raio de busca em km"),
+    origem: str = Query("detectadas", description="Origem: detectadas, ons ou ambas")
+):
+    """
+    Associa unidades consumidoras (GD) à subestação mais próxima.
+
+    Este endpoint realiza associação espacial entre UCs e subestações,
+    permitindo análise local por subestação (FASE 2 do plano).
+
+    - **raio_km**: Raio máximo de busca em km (padrão: 10km)
+    - **origem**: Usar subestações 'detectadas', 'ons' ou 'ambas'
+
+    Retorna estatísticas da associação realizada.
+    """
+    from ..services.subestacoes_clustering import associate_ucs_to_nearest_subestacao
+
+    try:
+        resultado = associate_ucs_to_nearest_subestacao(
+            engine=engine,
+            raio_km=raio_km,
+            origem=origem,
+            logger=logger
+        )
+        return resultado
+    except Exception as exc:
+        logger.error(f"Erro ao associar UCs: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao associar UCs a subestações") from exc
+
+
+@router.get("/{subestacao_id}/mix-consumidores")
+def get_mix_consumidores_subestacao(
+    subestacao_id: int,
+    engine: EngineDepends
+):
+    """
+    Retorna o mix de consumidores por subestação.
+
+    Mostra a quantidade de UCs por classe de consumo e tipo de estabelecimento
+    associadas a uma subestação específica.
+
+    - **subestacao_id**: ID da subestação
+
+    **Response**:
+    ```json
+    {
+      "subestacao_id": 123,
+      "mix": {
+        "Residencial": {
+          "qtd_instalacoes": 450,
+          "qtd_unidades_consumidoras": 5420,
+          "potencia_total_mw": 8.13,
+          "por_tipo": {
+            "residencia": {...},
+            "predio_residencial": {...}
+          }
+        },
+        "Comercial": {...}
+      },
+      "totais": {
+        "qtd_instalacoes": 500,
+        "qtd_unidades_consumidoras": 6000,
+        "potencia_total_mw": 12.5
+      }
+    }
+    ```
+    """
+    from ..services.subestacoes_clustering import get_uc_mix_by_subestacao
+
+    try:
+        resultado = get_uc_mix_by_subestacao(
+            engine=engine,
+            subestacao_id=subestacao_id,
+            logger=logger
+        )
+        return resultado
+    except Exception as exc:
+        logger.error(f"Erro ao buscar mix de consumidores: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao buscar mix de consumidores") from exc
+
+
+@router.get("/{subestacao_id}/carga-sintetica")
+def get_carga_sintetica_subestacao(
+    subestacao_id: int,
+    engine: EngineDepends
+):
+    """
+    Calcula curva de carga sintética horária para uma subestação.
+
+    Combina mix de consumidores com perfis típicos para gerar curva de 24 horas.
+
+    **Formula**:
+    ```
+    Carga_hora(h) = Σ (Qtd_UCs_classe × Consumo_medio_UC × Perfil_classe(h))
+    ```
+
+    - **subestacao_id**: ID da subestação
+
+    **Response**:
+    ```json
+    {
+      "subestacao_id": 123,
+      "curva_horaria_kw": [120.5, 110.2, ..., 245.8],  // 24 valores
+      "curva_horaria_mw": [0.121, 0.110, ..., 0.246],
+      "estatisticas": {
+        "pico_kw": 245.8,
+        "hora_pico": 19,
+        "vale_kw": 95.3,
+        "hora_vale": 3,
+        "media_kw": 156.7,
+        "fator_carga": 0.638
+      },
+      "contribuicao_por_classe": {
+        "Residencial": {
+          "qtd_ucs": 5420,
+          "curva_horaria_kw": [...],
+          "pico_kw": 180.5
+        }
+      },
+      "total_ucs": 6000
+    }
+    ```
+    """
+    from ..services.synthetic_load import calculate_synthetic_load_by_subestacao
+
+    try:
+        resultado = calculate_synthetic_load_by_subestacao(
+            engine=engine,
+            subestacao_id=subestacao_id
+        )
+        return resultado
+    except Exception as exc:
+        logger.error(f"Erro ao calcular carga sintética: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao calcular carga sintética") from exc

@@ -5,6 +5,8 @@ from .analise import (
     CargaOcultaItem,
     ClasseConsumoItem,
     EstabelecimentoContagem,
+    PerfilCarga,
+    PerfisResponse,
     ResumoGranular,
 )
 from .common import GeoJSONFeature, GeoJSONResponse, QueryParams
@@ -69,11 +71,12 @@ __all__ = [
     "EstabelecimentoContagem",
     "ResumoGranular",
     # Telhado
-    "CoordenadaGeografica",
-    "BoundingBoxPixeis",
-    "CentroidePixeis",
-    "TelhadoDetectadoResponse",
-    "ResultadoSegmentacaoResponse",
-    "ListaTelhadosResponse",
-    "EstatisticasSegmentacaoResponse",
+    "PerfilCarga",
+    "PerfisResponse",
+    "TelhadoSimples",
+    "ListaTelhadosSimples",
+    "EstatisticasSimples",
+    "TelhadosTransformadorResponse",
+    "EstatisticasSubestacao",
+    "DetalhesSubestacao",
 ]
