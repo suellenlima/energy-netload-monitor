@@ -86,6 +86,8 @@ docker-compose exec etl python src/extractors/gd_client.py
 docker-compose exec etl python src/extractors/inpe_weather_client.py
 docker-compose exec etl python src/fix_data.py
 
+docker-compose exec etl python src/extractors/bdgd_client.py
+
 # ETL com dados reais (ONS + ANEEL SIGA + OpenStreetMap)
 # docker-compose exec etl python src/extractors/area_cobertura_real.py --completo
 

@@ -19,4 +19,4 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
-python -m uvicorn src.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn src.main:app --host 127.0.0.1 --port 8000 --reload

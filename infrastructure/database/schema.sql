@@ -779,17 +779,28 @@ CREATE INDEX IF NOT EXISTS idx_etl_log_status ON etl_execucao_log(status);
 
 -- View: Últimas imagens por subestação (satélite)
 CREATE OR REPLACE VIEW v_satelite_ultimas_imagens AS
+WITH ranked_images AS (
+    SELECT 
+        sd.id as subestacao_id,
+        sd.nome as subestacao_nome,
+        si.sensor,
+        si.data_aquisicao,
+        si.resolucao_m,
+        si.cobertura_nuvem_pct,
+        si.url,
+        ROW_NUMBER() OVER (PARTITION BY sd.id, si.sensor ORDER BY si.data_aquisicao DESC) as rank
+    FROM subestacoes_detectadas sd
+    LEFT JOIN satelite_imagens si ON sd.id = si.subestacao_id
+)
 SELECT 
-    sd.id as subestacao_id,
-    sd.nome as subestacao_nome,
-    si.sensor,
-    si.data_aquisicao,
-    si.resolucao_m,
-    si.cobertura_nuvem_pct,
-    si.url,
-    ROW_NUMBER() OVER (PARTITION BY sd.id, si.sensor ORDER BY si.data_aquisicao DESC) as rank
-FROM subestacoes_detectadas sd
-LEFT JOIN satelite_imagens si ON sd.id = si.subestacao_id
+    subestacao_id,
+    subestacao_nome,
+    sensor,
+    data_aquisicao,
+    resolucao_m,
+    cobertura_nuvem_pct,
+    url
+FROM ranked_images
 WHERE rank = 1;
 
 -- View: Resumo de cobertura por subestação (satélite)
@@ -1445,7 +1456,6 @@ COMMENT ON COLUMN potencia_telhados.producao_anual_kwh IS 'Estimativa de produç
 
 -- Comentários tabelas ANEEL
 COMMENT ON TABLE transformadores_aneel IS 'Transformadores de distribuição da ANEEL importados via API ArcGIS';
-COMMENT ON COLUMN transformadores_aneel.codigo_aneel IS 'Código único do transformador na ANEEL';
 COMMENT ON COLUMN transformadores_aneel.distribuidora IS 'Nome da distribuidora (ex: RGE SUL, Equatorial, etc)';
 COMMENT ON COLUMN transformadores_aneel.fonte_dados IS 'Origem: ANEEL (importação automática)';
 
@@ -1455,7 +1465,6 @@ COMMENT ON COLUMN consumidores_aneel.tipo_cliente IS 'Tipo: residencial, comerci
 COMMENT ON COLUMN consumidores_aneel.distribuidora IS 'Distribuidora de energia responsável';
 
 COMMENT ON TABLE subestacoes_aneel IS 'Subestações de distribuição da ANEEL importadas via API ArcGIS';
-COMMENT ON COLUMN subestacoes_aneel.codigo_aneel IS 'Código único da subestação na ANEEL';
 COMMENT ON COLUMN subestacoes_aneel.distribuidora IS 'Distribuidora responsável pela subestação';
 
 -- ============================================================================
