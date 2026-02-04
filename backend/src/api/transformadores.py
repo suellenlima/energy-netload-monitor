@@ -2,23 +2,20 @@
 API Endpoints para Transformadores e Áreas de Cobertura
 """
 
-from typing import List, Optional
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.engine import Engine
+from fastapi import APIRouter, Depends, HTTPException, Query, Path
 
-from core import create_db_engine, load_settings
-from schemas import TransformadorSchema, AreaCoberturaSchema, SubestacaoSchema
-from services.area_service import AreaService
+from ..core import get_engine
+from ..services.transformador_service import TransformadorService
 
 router = APIRouter(prefix="/api/v1/transformadores", tags=["transformadores"])
 
 
-def get_area_service() -> AreaService:
-    """Dependência para obter serviço de áreas"""
-    settings = load_settings()
-    engine = create_db_engine(settings.database.url)
-    return AreaService(engine)
+def get_transformador_service() -> TransformadorService:
+    """Dependência para obter serviço de transformadores"""
+    engine = get_engine()
+    return TransformadorService(engine)
 
 
 # ============================================================================
@@ -28,14 +25,14 @@ def get_area_service() -> AreaService:
 @router.get("/{id}")
 def get_transformador_detalhes(
     id: int,
-    service: AreaService = Depends(get_area_service)
+    service: TransformadorService = Depends(get_transformador_service)
 ):
     """
     Retorna detalhes de um transformador incluindo sua área de cobertura
     
     - **id**: ID do transformador
     """
-    trans = service.obter_area_transformador(id)
+    trans = service.obter_detalhes(id)
     
     if not trans:
         raise HTTPException(status_code=404, detail="Transformador não encontrado")
@@ -50,62 +47,42 @@ def get_transformador_detalhes(
 def get_area_transformador(
     id: int,
     formato: str = Query("geojson", enum=["geojson", "wkt", "json"]),
-    service: AreaService = Depends(get_area_service)
+    service: TransformadorService = Depends(get_transformador_service)
 ):
     """
     Retorna a área de cobertura de um transformador em diferentes formatos
     
     - **formato**: geojson, wkt ou json
     """
-    trans = service.obter_area_transformador(id)
+    area = service.obter_area_cobertura_geojson(id, formato=formato)
     
-    if not trans:
+    if area is None:
         raise HTTPException(status_code=404, detail="Transformador não encontrado")
     
-    if formato == "geojson":
-        return {
-            "type": "Feature",
-            "geometry": trans.get("geojson_area"),
-            "properties": {
-                "id": trans["id"],
-                "nome": trans["nome"],
-                "area_km2": trans["area_km2"],
-                "raio_m": trans["raio_m"],
-                "potencia_kva": trans["potencia_kva"]
-            }
-        }
-    
-    elif formato == "wkt":
-        return {
-            "wkt": trans.get("wkt_area"),
-            "area_km2": trans["area_km2"]
-        }
-    
-    else:  # json
-        return {
-            "id": trans["id"],
-            "nome": trans["nome"],
-            "area_km2": trans["area_km2"],
-            "raio_m": trans["raio_m"],
-            "latitude": trans["latitude"],
-            "longitude": trans["longitude"]
-        }
+    return {
+        "status": "success",
+        "data": area
+    }
 
 
 @router.get("/{id}/bbox")
 def get_bbox_transformador(
     id: int,
-    service: AreaService = Depends(get_area_service)
+    margem_km: float = Query(2.0, gt=0.1, le=50),
+    service: TransformadorService = Depends(get_transformador_service)
 ):
     """
     Retorna bounding box de um transformador para busca de imagens de satélite
+    
+    Parâmetros:
+    - **margem_km**: Margem em km ao redor do transformador (padrão: 2 km)
     
     Útil para:
     - Baixar imagens Sentinel-2
     - Buscar no Planetary Computer
     - Download de dados de satélite
     """
-    bbox = service.obter_bbox_transformador(id)
+    bbox = service.obter_bbox_para_satelite(id, margem_km=margem_km)
     
     if not bbox:
         raise HTTPException(status_code=404, detail="Transformador não encontrado")
@@ -120,83 +97,91 @@ def get_bbox_transformador(
 # TRANSFORMADORES - LISTAGEM
 # ============================================================================
 
-@router.get("/subestacao/{subestacao_id}")
+@router.get("/subestacao/{subestacao_codigo}")
 def listar_transformadores_subestacao(
-    subestacao_id: int,
+    subestacao_codigo: str,
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    service: AreaService = Depends(get_area_service)
+    service: TransformadorService = Depends(get_transformador_service)
 ):
     """
     Lista todos os transformadores de uma subestação com suas áreas
     
-    - **subestacao_id**: ID da subestação
+    - **subestacao_codigo**: Código da subestação
     - **skip**: Offset para paginação
     - **limit**: Limite de resultados (máx 1000)
     """
-    df = service.listar_transformadores_subestacao(subestacao_id)
-    
-    if df.empty:
-        return {
-            "status": "success",
-            "data": [],
-            "total": 0
-        }
-    
-    transformadores = df.iloc[skip:skip + limit].to_dict('records')
+    resultado = service.listar_por_subestacao(subestacao_codigo, skip=skip, limit=limit)
     
     return {
         "status": "success",
-        "data": transformadores,
-        "total": len(df),
-        "skip": skip,
-        "limit": limit
+        **resultado
     }
+
+
+@router.get("/distribuidora/{distribuidora}")
+def listar_transformadores_distribuidora(
+    distribuidora: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    service: TransformadorService = Depends(get_transformador_service)
+):
+    """
+    Lista transformadores de uma distribuidora
+    
+    - **distribuidora**: Nome ou parte do nome da distribuidora
+    - **skip**: Offset para paginação
+    - **limit**: Limite de resultados (máx 1000)
+    """
+    resultado = service.listar_por_distribuidora(distribuidora, skip=skip, limit=limit)
+    
+    return {
+        "status": "success",
+        **resultado
+    }
+
+
+@router.get("/tipo-tensao/{tipo_tensao}")
+def listar_transformadores_por_tipo_tensao(
+    tipo_tensao: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    service: TransformadorService = Depends(get_transformador_service)
+):
+    """
+    Lista transformadores por tipo de tensão
+    
+    - **tipo_tensao**: "BT" (Baixa), "MT" (Média) ou "AT" (Alta)
+    - **skip**: Offset para paginação
+    - **limit**: Limite de resultados
+    """
+    try:
+        resultado = service.listar_por_tipo_tensao(tipo_tensao, skip=skip, limit=limit)
+        return {
+            "status": "success",
+            **resultado
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("")
 def listar_transformadores(
-    subestacao_id: Optional[int] = Query(None),
-    min_lat: Optional[float] = Query(None),
-    min_lon: Optional[float] = Query(None),
-    max_lat: Optional[float] = Query(None),
-    max_lon: Optional[float] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    service: AreaService = Depends(get_area_service)
+    service: TransformadorService = Depends(get_transformador_service)
 ):
     """
-    Lista transformadores com filtros e paginação
+    Lista todos os transformadores com paginação
     
-    Filtros disponíveis:
-    - **subestacao_id**: Filtrar por subestação
-    - **min_lat, min_lon, max_lat, max_lon**: Busca por bounding box (região)
+    - **skip**: Offset para paginação
+    - **limit**: Limite de resultados (máx 1000)
     """
-    
-    if subestacao_id:
-        df = service.listar_transformadores_subestacao(subestacao_id)
-    
-    elif min_lat and min_lon and max_lat and max_lon:
-        df = service.buscar_transformadores_por_regiao(min_lat, min_lon, max_lat, max_lon)
-    
-    else:
-        df = service.listar_todas_transformadores()
-    
-    if df.empty:
-        return {
-            "status": "success",
-            "data": [],
-            "total": 0
-        }
-    
-    transformadores = df.iloc[skip:skip + limit].to_dict('records')
+    resultado = service.listar_todos(skip=skip, limit=limit)
     
     return {
         "status": "success",
-        "data": transformadores,
-        "total": len(df),
-        "skip": skip,
-        "limit": limit
+        **resultado
     }
 
 
@@ -206,11 +191,11 @@ def listar_transformadores(
 
 @router.get("/export/{formato}")
 def exportar_transformadores(
-    formato: str = Query(..., enum=["csv", "geojson", "json"]),
-    service: AreaService = Depends(get_area_service)
+    formato: str = Path(..., enum=["csv", "geojson", "json"]),
+    service: TransformadorService = Depends(get_transformador_service)
 ):
     """
-    Exporta todos os transformadores com suas áreas
+    Exporta todos os transformadores
     
     Formatos disponíveis:
     - **csv**: Arquivo CSV para Excel/Google Sheets
@@ -219,7 +204,7 @@ def exportar_transformadores(
     """
     
     try:
-        resultado = service.exportar_transformadores(formato=formato)
+        resultado = service.exportar(formato=formato)
         
         if not resultado:
             raise HTTPException(
@@ -230,9 +215,11 @@ def exportar_transformadores(
         return {
             "status": "success",
             "formato": formato,
-            "data": resultado if formato == "json" else "Use endpoint POST para download"
+            "data": resultado if isinstance(resultado, dict) else resultado[:500]  # Preview CSV
         }
     
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -241,16 +228,37 @@ def exportar_transformadores(
 # ESTATÍSTICAS
 # ============================================================================
 
-@router.get("/stats/areas")
-def obter_estatisticas_areas(
-    service: AreaService = Depends(get_area_service)
+@router.get("/stats/geral")
+def obter_estatisticas_gerais(
+    service: TransformadorService = Depends(get_transformador_service)
 ):
     """
-    Retorna estatísticas gerais de áreas de transformadores
+    Retorna estatísticas gerais de transformadores
     
     Informações:
-    - Total de transformadores
-    - Quantos têm área calculada
+    - Total por tipo de tensão (BT, MT, AT)
+    - Potência média, mínima e máxima
+    - Quantidade de subestações e distribuidoras
+    """
+    
+    stats = service.obter_estatisticas_gerais()
+    
+    return {
+        "status": "success",
+        "data": stats
+    }
+
+
+@router.get("/stats/areas")
+def obter_estatisticas_areas(
+    service: TransformadorService = Depends(get_transformador_service)
+):
+    """
+    Retorna estatísticas de áreas de transformadores
+    
+    Informações:
+    - Total de áreas calculadas
+    - Métodos usados (ConvexHull vs Buffer)
     - Área média, mínima e máxima
     - Área total coberta
     """
@@ -275,7 +283,7 @@ def buscar_transformadores_regiao(
     max_lon: float = Query(...),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    service: AreaService = Depends(get_area_service)
+    service: TransformadorService = Depends(get_transformador_service)
 ):
     """
     Busca transformadores dentro de um bounding box (região)
@@ -291,30 +299,90 @@ def buscar_transformadores_regiao(
     """
     
     try:
-        df = service.buscar_transformadores_por_regiao(min_lat, min_lon, max_lat, max_lon)
-        
-        if df.empty:
-            return {
-                "status": "success",
-                "data": [],
-                "total": 0
-            }
-        
-        transformadores = df.iloc[skip:skip + limit].to_dict('records')
+        resultado = service.buscar_por_regiao(min_lat, min_lon, max_lat, max_lon, skip=skip, limit=limit)
         
         return {
             "status": "success",
-            "data": transformadores,
-            "total": len(df),
-            "skip": skip,
-            "limit": limit,
-            "bbox": {
-                "min_lat": min_lat,
-                "min_lon": min_lon,
-                "max_lat": max_lat,
-                "max_lon": max_lon
-            }
+            **resultado
         }
     
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# CONSUMIDORES ASSOCIADOS
+# ============================================================================
+
+@router.get("/{id}/consumidores/resumo")
+def obter_resumo_consumidores(
+    id: int,
+    service: TransformadorService = Depends(get_transformador_service)
+):
+    """
+    Retorna contagem de consumidores BT/MT/AT associados a um transformador
+    
+    - **id**: ID do transformador
+    """
+    transformador = service.obter_detalhes(id)
+    if not transformador:
+        raise HTTPException(status_code=404, detail="Transformador não encontrado")
+    
+    consumidores = service.obter_consumidores_associados(transformador['codigo'])
+    
+    return {
+        "status": "success",
+        "transformador_id": id,
+        "transformador_codigo": transformador['codigo'],
+        "data": consumidores
+    }
+
+
+@router.get("/{id}/consumidores/bt")
+def listar_consumidores_bt(
+    id: int,
+    limit: int = Query(100, ge=1, le=1000),
+    service: TransformadorService = Depends(get_transformador_service)
+):
+    """
+    Lista consumidores de Baixa Tensão (BT) de um transformador
+    
+    - **id**: ID do transformador
+    - **limit**: Limite de resultados
+    """
+    transformador = service.obter_detalhes(id)
+    if not transformador:
+        raise HTTPException(status_code=404, detail="Transformador não encontrado")
+    
+    resultado = service.listar_consumidores_bt_do_transformador(transformador['codigo'], limit=limit)
+    
+    return {
+        "status": "success",
+        **resultado
+    }
+
+
+@router.get("/{id}/consumidores/mt")
+def listar_consumidores_mt(
+    id: int,
+    limit: int = Query(100, ge=1, le=1000),
+    service: TransformadorService = Depends(get_transformador_service)
+):
+    """
+    Lista consumidores de Média Tensão (MT) de um transformador
+    
+    - **id**: ID do transformador
+    - **limit**: Limite de resultados
+    """
+    transformador = service.obter_detalhes(id)
+    if not transformador:
+        raise HTTPException(status_code=404, detail="Transformador não encontrado")
+    
+    resultado = service.listar_consumidores_mt_do_transformador(transformador['codigo'], limit=limit)
+    
+    return {
+        "status": "success",
+        **resultado
+    }

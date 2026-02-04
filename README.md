@@ -53,19 +53,62 @@ docker-compose exec db psql -U admin -d energy_monitor -c "SELECT table_name FRO
 
 Executar extracoes:
 ```powershell
+# ✅ Dados ANEEL SIGA (Geração Distribuída) - FUNCIONANDO
 docker-compose exec etl python src/extractors/aneel_client.py
+
+# ✅ Dados ONS
 docker-compose exec etl python src/extractors/ons_client.py
 docker-compose exec etl python src/extractors/subestacoes_client.py
+
+# Dados adicionais
 docker-compose exec etl python src/extractors/gd_client.py
 docker-compose exec etl python src/extractors/inpe_weather_client.py
 docker-compose exec etl python src/fix_data.py
 
-# ETL com dados reais (ONS, ANEEL, OpenStreetMap)
-docker-compose exec etl python src/extractors/area_cobertura_real.py --completo
+# ETL com dados reais (ONS + ANEEL SIGA + OpenStreetMap)
+# docker-compose exec etl python src/extractors/area_cobertura_real.py --completo
 
+
+# 📍 ETL LOCAL - ANEEL BDGD (Transformadores, Subestações, Consumidores)
+
+## Setup inicial (executar uma única vez)
+```powershell
+# Instalar extensões PostGIS
+docker compose exec -T db psql -U admin -d energy_monitor -c "CREATE EXTENSION IF NOT EXISTS postgis; CREATE EXTENSION IF NOT EXISTS postgis_topology;"
+```
+
+## Executar ETL
+```powershell
+
+bash infrastructure/database/init_schema_aneel_bdgd.sh
+or 
+docker cp infrastructure/database/schema_aneel_bdgd.sql energy_db:/tmp/schema.sql ; docker exec energy_db psql -U admin -d energy_monitor -f /tmp/schema.sql 2>&1 | Select-Object -Last 40
+
+docker exec energy_db psql -U admin -d energy_monitor -c "\dt" 2>&1
+
+# Extração e carga de dados ANEEL BDGD
+docker compose exec -T etl python /app/src/extractors/aneel_bdgd_local/etl_aneel_bdgd_local.py
+
+# Com debug (mostra detalhes de processamento)
+docker compose exec -T etl python /app/src/extractors/aneel_bdgd_local/etl_aneel_bdgd_local.py --debug
+```
+
+
+# ETL AUTOMATICA PARA DADOS BDGD AUTOMATICOS
+
+python aneel_downloader_final.py
+
+docker compose cp data/aneel_downloads/aneel_items_resumo.json etl:/data/aneel_downloads/aneel_items_resumo.json
+
+docker compose exec etl python src/extractors/aneel_bdgd_auto_sync.py --sync-all
+
+# 📍 ANEEL BDGD - Dados de Distribuição (Transformadores, Consumidores, Subestações)
+# 📥 Download: https://dadosabertos-aneel.opendata.arcgis.com/search?tags=distribuicao
+# 📝 Ver documentação: documentation/QUICK_START_ANEEL_URLS.md
+
+# Sincronização SCADA (opcional)
 # docker-compose exec etl python src/extractors/scada_sync_etl.py --todas
-
-docker-compose exec etl python src/extractors/scada_sync_etl.py --todas --modo hibrido
+# docker-compose exec etl python src/extractors/scada_sync_etl.py --todas --modo hibrido
 ```
 
 ## Dados Carregados
@@ -76,15 +119,17 @@ Após executar o ETL completo, você terá:
 - **Transformadores** mapeados via OpenStreetMap com áreas de cobertura real
 - **Áreas de cobertura** calculadas por transformador usando ConvexHull de consumidores
 
-Verificar dados carregados:
-```powershell
-docker-compose exec db psql -U admin -d energy_monitor -c \
-  "SELECT COUNT(*) as total_subestacoes FROM subestacoes; 
-   SELECT COUNT(*) as total_usinas FROM usinas_solares; 
-   SELECT COUNT(*) as total_transformadores FROM transformadores_area_cobertura;"
-```
+### Dados ANEEL BDGD - Distribuição (Transformadores, Consumidores, Subestações)
 
-## ETL com Dados Reais (ONS, ANEEL, OpenStreetMap)
+**O que é:** Banco de Dados Geográfico da Distribuidora (BDGD) - dados oficiais de distribuição de energia
+
+**Formato:** File Geodatabase (FGDB) - layers georeferenciadas
+
+**Disponibilidade:**
+- ✅ 1.827+ arquivos FGDB (File Geodatabase)
+- ✅ Todas as 50+ distribuidoras do Brasil
+- ✅ Histórico multi-ano
+- ✅ Acesso 100% público e gratuito
 
 
 ### Executar ETL completo (ONS + ANEEL + OSM)

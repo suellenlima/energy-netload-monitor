@@ -17,11 +17,7 @@ from sklearn.cluster import DBSCAN
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-SRC_DIR = Path(__file__).resolve().parents[1]
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
-from core import delete_all_rows, table_exists
+from ..core import delete_all_rows, table_exists
 
 
 def detect_subestacoes_by_clustering(

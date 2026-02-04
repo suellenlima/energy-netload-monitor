@@ -43,9 +43,9 @@ class AreaService:
                         ST_Buffer(t.localizacao::geography, 500)::geometry))::text as geojson_area,
                     (SELECT COUNT(*) FROM consumidores 
                      WHERE transformador_id = :trans_id AND status = 'ativo') as consumidores
-                FROM transformadores t
+                FROM transformadores_aneel t
                 LEFT JOIN transformadores_area_cobertura tac ON tac.transformador_id = t.id
-                WHERE t.id = :trans_id AND t.status = 'ativo'
+                WHERE t.id = :trans_id
             """), {'trans_id': transformador_id})
             
             row = result.fetchone()
@@ -108,9 +108,9 @@ class AreaService:
                     COALESCE(tac.metodo_definicao, 'raio_fixo') as metodo,
                     (SELECT COUNT(*) FROM consumidores 
                      WHERE transformador_id = t.id AND status = 'ativo') as consumidores
-                FROM transformadores t
+                FROM transformadores_aneel t
                 LEFT JOIN transformadores_area_cobertura tac ON tac.transformador_id = t.id
-                WHERE t.subestacao_id = :sub_id AND t.status = 'ativo'
+                WHERE t.id = :sub_id
                 ORDER BY t.nome
             """), {'sub_id': subestacao_id})
             
@@ -139,10 +139,9 @@ class AreaService:
                     COALESCE(tac.metodo_definicao, 'raio_fixo') as metodo,
                     (SELECT COUNT(*) FROM consumidores 
                      WHERE transformador_id = t.id AND status = 'ativo') as consumidores
-                FROM transformadores t
+                FROM transformadores_aneel t
                 LEFT JOIN transformadores_area_cobertura tac ON tac.transformador_id = t.id
-                WHERE t.status = 'ativo'
-                ORDER BY t.subestacao_id, t.nome
+                ORDER BY t.id, t.nome
             """))
             
             df = pd.DataFrame(result.fetchall(), columns=[
@@ -171,8 +170,8 @@ class AreaService:
                     sac.metodo_definicao,
                     ST_AsText(sac.area_cobertura) as wkt_area,
                     ST_AsGeoJSON(sac.area_cobertura)::text as geojson_area,
-                    (SELECT COUNT(*) FROM transformadores 
-                     WHERE subestacao_id = :sub_id AND status = 'ativo') as total_transformadores
+                    (SELECT COUNT(*) FROM transformadores_aneel 
+                     WHERE id = :sub_id) as total_transformadores
                 FROM subestacoes_detectadas se
                 LEFT JOIN subestacoes_area_cobertura sac ON sac.subestacao_id = se.id
                 WHERE se.id = :sub_id
@@ -220,11 +219,10 @@ class AreaService:
                     t.potencia_kva,
                     COALESCE(tac.area_km2, 0.25) as area_km2,
                     COALESCE(tac.raio_aproximado_m, 500) as raio_m
-                FROM transformadores t
+                FROM transformadores_aneel t
                 LEFT JOIN transformadores_area_cobertura tac ON tac.transformador_id = t.id
                 WHERE t.latitude BETWEEN :min_lat AND :max_lat
                   AND t.longitude BETWEEN :min_lon AND :max_lon
-                  AND t.status = 'ativo'
                 ORDER BY t.nome
             """), {
                 'min_lat': min_lat, 'min_lon': min_lon,
@@ -255,9 +253,8 @@ class AreaService:
                     ROUND(MIN(tac.area_km2)::numeric, 2) as area_minima_km2,
                     ROUND(MAX(tac.area_km2)::numeric, 2) as area_maxima_km2,
                     ROUND(SUM(tac.area_km2)::numeric, 2) as area_total_km2
-                FROM transformadores t
+                FROM transformadores_aneel t
                 LEFT JOIN transformadores_area_cobertura tac ON tac.transformador_id = t.id
-                WHERE t.status = 'ativo'
             """))
             
             row = result.fetchone()

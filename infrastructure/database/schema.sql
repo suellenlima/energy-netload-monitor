@@ -604,6 +604,9 @@ CREATE TABLE IF NOT EXISTS requisicoes_satelite_cbers4a (
     url_download TEXT,
     tamanho_mb DOUBLE PRECISION,
     observacoes TEXT,
+    fonte_satelite VARCHAR(50),
+    custo_usd_estimado DOUBLE PRECISION,
+    tempo_requisicao_ms INTEGER,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -1439,6 +1442,91 @@ COMMENT ON TABLE potencia_telhados IS 'Resumo desnormalizado de potência e prod
 COMMENT ON COLUMN paineis_solares_detectados.bbox_json IS 'Bounding box do painel na imagem ROI: {x, y, w, h}';
 COMMENT ON COLUMN paineis_solares_detectados.potencia_w IS 'Potência estimada do painel (W/m² × área)';
 COMMENT ON COLUMN potencia_telhados.producao_anual_kwh IS 'Estimativa de produção anual em kWh baseada em 4.5 kWh/m²/dia (padrão Brasil)';
+
+-- Comentários tabelas ANEEL
+COMMENT ON TABLE transformadores_aneel IS 'Transformadores de distribuição da ANEEL importados via API ArcGIS';
+COMMENT ON COLUMN transformadores_aneel.codigo_aneel IS 'Código único do transformador na ANEEL';
+COMMENT ON COLUMN transformadores_aneel.distribuidora IS 'Nome da distribuidora (ex: RGE SUL, Equatorial, etc)';
+COMMENT ON COLUMN transformadores_aneel.fonte_dados IS 'Origem: ANEEL (importação automática)';
+
+COMMENT ON TABLE consumidores_aneel IS 'Unidades Consumidoras (UCs) da ANEEL importadas via API ArcGIS';
+COMMENT ON COLUMN consumidores_aneel.codigo_uc IS 'Código da Unidade Consumidora na ANEEL';
+COMMENT ON COLUMN consumidores_aneel.tipo_cliente IS 'Tipo: residencial, comercial, industrial, etc';
+COMMENT ON COLUMN consumidores_aneel.distribuidora IS 'Distribuidora de energia responsável';
+
+COMMENT ON TABLE subestacoes_aneel IS 'Subestações de distribuição da ANEEL importadas via API ArcGIS';
+COMMENT ON COLUMN subestacoes_aneel.codigo_aneel IS 'Código único da subestação na ANEEL';
+COMMENT ON COLUMN subestacoes_aneel.distribuidora IS 'Distribuidora responsável pela subestação';
+
+-- ============================================================================
+-- PARTE 13: TABELAS ANEEL - DISTRIBUIÇÃO
+-- ============================================================================
+
+-- Tabela de transformadores ANEEL (distribuição)
+CREATE TABLE IF NOT EXISTS transformadores_aneel (
+    id SERIAL PRIMARY KEY,
+    codigo_aneel VARCHAR(50) UNIQUE,
+    nome VARCHAR(200) NOT NULL,
+    potencia_kva DECIMAL(10, 2),
+    tensao_primaria_kv DECIMAL(10, 2),
+    tensao_secundaria_v INTEGER,
+    tipo VARCHAR(50),
+    status VARCHAR(20) DEFAULT 'ativo',
+    distribuidora VARCHAR(100) NOT NULL,
+    latitude DECIMAL(10, 7),
+    longitude DECIMAL(11, 7),
+    geom GEOMETRY(Point, 4326),
+    fonte_dados VARCHAR(50) DEFAULT 'ANEEL',
+    data_importacao TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT transformadores_aneel_unique_codigo UNIQUE (codigo_aneel, distribuidora)
+);
+
+-- Tabela de consumidores ANEEL (UCs)
+CREATE TABLE IF NOT EXISTS consumidores_aneel (
+    id SERIAL PRIMARY KEY,
+    codigo_uc VARCHAR(50) NOT NULL,
+    nome VARCHAR(200),
+    tipo_cliente VARCHAR(50),
+    distribuidora VARCHAR(100) NOT NULL,
+    latitude DECIMAL(10, 7),
+    longitude DECIMAL(11, 7),
+    geom GEOMETRY(Point, 4326),
+    fonte_dados VARCHAR(50) DEFAULT 'ANEEL',
+    data_importacao TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT consumidores_aneel_unique_codigo UNIQUE (codigo_uc, distribuidora)
+);
+
+-- Tabela de subestações ANEEL (distribuição)
+CREATE TABLE IF NOT EXISTS subestacoes_aneel (
+    id SERIAL PRIMARY KEY,
+    codigo_aneel VARCHAR(50) UNIQUE,
+    nome VARCHAR(200) NOT NULL,
+    distribuidora VARCHAR(100) NOT NULL,
+    latitude DECIMAL(10, 7),
+    longitude DECIMAL(11, 7),
+    geom GEOMETRY(Point, 4326),
+    fonte_dados VARCHAR(50) DEFAULT 'ANEEL',
+    data_importacao TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Índices para tabelas ANEEL
+CREATE INDEX IF NOT EXISTS idx_transformadores_aneel_geom ON transformadores_aneel USING GIST(geom);
+CREATE INDEX IF NOT EXISTS idx_transformadores_aneel_distribuidora ON transformadores_aneel(distribuidora);
+CREATE INDEX IF NOT EXISTS idx_transformadores_aneel_status ON transformadores_aneel(status);
+CREATE INDEX IF NOT EXISTS idx_transformadores_aneel_distribuida_status ON transformadores_aneel(distribuidora, status);
+
+CREATE INDEX IF NOT EXISTS idx_consumidores_aneel_geom ON consumidores_aneel USING GIST(geom);
+CREATE INDEX IF NOT EXISTS idx_consumidores_aneel_distribuidora ON consumidores_aneel(distribuidora);
+CREATE INDEX IF NOT EXISTS idx_consumidores_aneel_tipo ON consumidores_aneel(tipo_cliente);
+
+CREATE INDEX IF NOT EXISTS idx_subestacoes_aneel_geom ON subestacoes_aneel USING GIST(geom);
+CREATE INDEX IF NOT EXISTS idx_subestacoes_aneel_distribuidora ON subestacoes_aneel(distribuidora);
 
 -- ============================================================================
 -- PARTE 14: DADOS DE INICIALIZAÇÃO

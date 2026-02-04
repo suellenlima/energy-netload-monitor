@@ -9,6 +9,7 @@ from .api.auxiliar import router as auxiliar_router
 from .api.health import router as health_router
 from .api.satelite import router as satelite_router
 from .api.subestacoes import router as subestacoes_router
+from .api.transformadores import router as transformadores_router
 from .core import (
     AppException,
     app_exception_handler,
@@ -48,6 +49,7 @@ app.include_router(health_router)
 app.include_router(analise_router)
 app.include_router(auxiliar_router)
 app.include_router(subestacoes_router)
+app.include_router(transformadores_router)
 app.include_router(satelite_router)
 app.include_router(telhado.router)
 app.include_router(telhado_multifonte.router)
