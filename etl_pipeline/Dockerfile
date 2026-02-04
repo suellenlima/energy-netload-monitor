@@ -2,6 +2,9 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
+# Configurar PYTHONPATH para incluir src
+ENV PYTHONPATH=/app/src:$PYTHONPATH
+
 # Dependências para processamento de dados pesados e geo
 RUN apt-get update && apt-get install -y \
     libgdal-dev --no-install-recommends && \
