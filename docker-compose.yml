@@ -98,6 +98,7 @@ services:
     command: tail -f /dev/null 
     volumes:
       - ./etl_pipeline:/app
+      - ./etl_pipeline/src:/src # Acesso ao código central (core)
       - ./data:/app/data # Acesso à pasta local de dados
     environment:
       DATABASE_URL: postgresql://${DB_USER:-admin}:${DB_PASS:-admin123}@db:5432/${DB_NAME:-energy_monitor}

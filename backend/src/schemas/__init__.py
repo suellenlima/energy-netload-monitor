@@ -30,13 +30,12 @@ from .subestacao import (
     TaskAsyncResponse,
 )
 from .telhado import (
-    CoordenadaGeografica,
-    BoundingBoxPixeis,
-    CentroidePixeis,
-    TelhadoDetectadoResponse,
-    ResultadoSegmentacaoResponse,
-    ListaTelhadosResponse,
-    EstatisticasSegmentacaoResponse,
+    TelhadoSimples,
+    ListaTelhadosSimples,
+    EstatisticasSimples,
+    TelhadosTransformadorResponse,
+    EstatisticasSubestacao,
+    DetalhesSubestacao,
 )
 
 __all__ = [

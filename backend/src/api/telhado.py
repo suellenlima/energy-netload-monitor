@@ -1,26 +1,35 @@
 """
 API REST para processamento de telhados/edifícios em imagens de satélite
+
+Refatorado em 3 camadas:
+- API: Recebe requisição HTTP, valida entrada, retorna resposta
+- Service: Orquestra lógica de negócio, agregação de dados
+- Repository: Acessa banco de dados (schema_aneel_bdgd.sql)
+
+Database Schema: ANEEL BDGD
+Tabelas utilizadas:
+  - telhados_detectados_transformador: Telhados detectados (READ/WRITE)
+  - transformadores_aneel: Dados de transformadores (READ)
+  - subestacoes_aneel: Dados de subestações (READ)
+
+Author: Energy Netload Monitor
+Date: 2026-02-04
 """
 
 import logging
-import json
 from datetime import datetime
-from typing import Optional, Dict
-from fastapi import APIRouter, HTTPException, Query, Path
-from sqlalchemy import text
+from typing import Optional, Dict, Any
+from fastapi import APIRouter, HTTPException, Query, Path, Depends
 
-from ..services.telhado_segmentation_service import (
-    ResultadoProcessamentoTelhados
-)
-from ..services.telhado_transformador_service import (
-    TelhadoTransformadorService
-)
-
+from ..services.roof_service import RoofService as TelhadoService
+from ..core import get_engine
 from ..schemas.telhado import (
-    ResultadoSegmentacaoResponse,
-    TelhadoDetectadoResponse,
-    ListaTelhadosResponse,
-    EstatisticasSegmentacaoResponse,
+    ListaTelhadosSimples,
+    EstatisticasSimples,
+    TelhadosTransformadorResponse,
+    EstatisticasSubestacao,
+    DetalhesSubestacao,
+    TelhadoSimples,
 )
 
 # Configure logging
@@ -29,12 +38,16 @@ logger = logging.getLogger(__name__)
 # Criar router
 router = APIRouter(
     prefix="/telhados",
-    tags=["Telhados - Segmentação"],
+    tags=["Telhados"],
     responses={404: {"description": "Não encontrado"}}
 )
 
-# Cache global do serviço (simplificado - usar Redis em produção)
-_resultados_processamento: Dict[str, ResultadoProcessamentoTelhados] = {}
+
+def get_telhado_service() -> TelhadoService:
+    """Dependência para obter serviço de telhados."""
+    engine = get_engine()
+    return TelhadoService(engine)
+
 
 # ============================================================================
 # ENDPOINT 1: Listar Telhados com Filtros
@@ -42,59 +55,64 @@ _resultados_processamento: Dict[str, ResultadoProcessamentoTelhados] = {}
 
 @router.get(
     "/lista",
-    response_model=ListaTelhadosResponse,
+    response_model=ListaTelhadosSimples,
     summary="Listar telhados processados",
     description="Retorna lista paginada de telhados com filtros opcionais"
 )
-async def listar_telhados(
-    id_subestacao: Optional[str] = Query(None, description="Filtrar por subestação"),
-    tipo_edificio: Optional[str] = Query(None, description="Filtrar por tipo"),
+def listar_telhados(
+    id_subestacao: Optional[int] = Query(None, description="Filtrar por subestação"),
     confianca_minima: float = Query(0.0, ge=0, le=1.0, description="Confiança mínima"),
     pagina: int = Query(1, ge=1, description="Número da página"),
-    limite: int = Query(100, ge=1, le=10000, description="Itens por página")
-) -> ListaTelhadosResponse:
+    limite: int = Query(100, ge=1, le=10000, description="Itens por página"),
+    service: TelhadoService = Depends(get_telhado_service)
+) -> ListaTelhadosSimples:
     """
-    Lista telhados com suporte a filtros e paginação
+    Lista telhados com suporte a filtros e paginação.
     
     Args:
         id_subestacao: Filtro opcional de subestação
-        tipo_edificio: Filtro opcional de tipo
         confianca_minima: Filtro de confiança mínima
         pagina: Página (padrão: 1)
         limite: Itens por página (padrão: 100)
+    
+    Returns:
+        ListaTelhadosSimples com telhados paginados
     """
     try:
-        # Buscar resultados processados (em cache)
-        telhados_filtrados = []
-        
-        for resultado in _resultados_processamento.values():
-            if id_subestacao and resultado.id_subestacao != id_subestacao:
-                continue
-            
-            for telhado in resultado.telhados:
-                if confianca_minima and telhado.confianca < confianca_minima:
-                    continue
-                if tipo_edificio and telhado.tipo_edificio != tipo_edificio:
-                    continue
-                
-                telhados_filtrados.append(telhado)
-        
-        # Paginação
-        inicio = (pagina - 1) * limite
-        fim = inicio + limite
-        
-        # Converter para response
-        responses = [_converter_telhado_para_response(t) for t in telhados_filtrados]
-        responses_pagina = responses[inicio:fim]
-        
-        return ListaTelhadosResponse(
-            total_resultados=len(telhados_filtrados),
+        resultado = service.listar_telhados(
+            id_subestacao=id_subestacao,
+            confianca_minima=confianca_minima,
             pagina=pagina,
-            resultados_por_pagina=limite,
-            total_paginas=(len(telhados_filtrados) + limite - 1) // limite,
-            telhados=responses_pagina
+            limite=limite
         )
         
+        # Converter telhados para response
+        telhados_response = []
+        for telhado in resultado['telhados']:
+            telhados_response.append(TelhadoSimples(
+                id_telhado=telhado['id'],
+                transformador_id=telhado['transformador_id'],
+                subestacao_id=telhado['subestacao_id'],
+                latitude=telhado['latitude'],
+                longitude=telhado['longitude'],
+                area_m2=telhado['area_m2'],
+                confianca=telhado['confianca'],
+                timestamp_deteccao=telhado['timestamp_deteccao'],
+                transformador_codigo=telhado.get('transformador_codigo'),
+                subestacao_codigo=telhado.get('subestacao_codigo')
+            ))
+        
+        return ListaTelhadosSimples(
+            total_resultados=resultado['total'],
+            pagina=resultado['pagina'],
+            limite=resultado['limite'],
+            total_paginas=resultado['total_paginas'],
+            telhados=telhados_response
+        )
+        
+    except ValueError as e:
+        logger.error(f"Erro de validação: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Erro ao listar telhados: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -106,34 +124,53 @@ async def listar_telhados(
 
 @router.get(
     "/subestacao/{id_subestacao}",
-    response_model=ResultadoSegmentacaoResponse,
+    response_model=DetalhesSubestacao,
     summary="Obter detalhes de telhados de uma subestação",
-    description="Retorna resultado completo do processamento de uma subestação"
+    description="Retorna telhados de uma subestação específica"
 )
-async def obter_detalhes_subestacao(
-    id_subestacao: str = Path(..., description="ID da subestação")
-) -> ResultadoSegmentacaoResponse:
+def obter_detalhes_subestacao(
+    id_subestacao: int = Path(..., description="ID da subestação"),
+    service: TelhadoService = Depends(get_telhado_service)
+) -> DetalhesSubestacao:
     """
-    Obtém resultado armazenado em cache
+    Obtém detalhes completos de uma subestação com seus telhados.
     
     Args:
         id_subestacao: ID da subestação
+    
+    Returns:
+        DetalhesSubestacao com telhados
     """
     try:
-        # Buscar no cache
-        for resultado in _resultados_processamento.values():
-            if resultado.id_subestacao == id_subestacao:
-                return _converter_resultado_para_response(resultado)
+        resultado = service.obter_detalhes_subestacao(id_subestacao)
         
-        raise HTTPException(
-            status_code=404,
-            detail=f"Nenhum processamento encontrado para subestação {id_subestacao}"
+        # Converter para response
+        telhados_response = []
+        for telhado in resultado.get('telhados', []):
+            telhados_response.append(TelhadoSimples(
+                id_telhado=telhado['id'],
+                transformador_id=telhado['transformador_id'],
+                subestacao_id=telhado['subestacao_id'],
+                latitude=telhado['latitude'],
+                longitude=telhado['longitude'],
+                area_m2=telhado['area_m2'],
+                confianca=telhado['confianca'],
+                timestamp_deteccao=telhado['timestamp_deteccao'],
+                transformador_codigo=telhado.get('transformador_codigo')
+            ))
+        
+        return DetalhesSubestacao(
+            subestacao_id=id_subestacao,
+            timestamp_processamento=resultado['timestamp_processamento'],
+            telhados_detectados=resultado['telhados_detectados'],
+            area_total_m2=resultado['area_total_m2'],
+            confianca_media=resultado['confianca_media'],
+            transformadores_processados=resultado.get('transformadores_processados', 0),
+            telhados=telhados_response
         )
         
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Erro ao obter detalhes: {e}")
+        logger.error(f"Erro ao obter detalhes subestação: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -143,236 +180,183 @@ async def obter_detalhes_subestacao(
 
 @router.get(
     "/estatisticas",
-    response_model=EstatisticasSegmentacaoResponse,
+    response_model=EstatisticasSimples,
     summary="Estatísticas agregadas de segmentação",
-    description="Retorna estatísticas consolidadas de todos os processamentos"
+    description="Retorna estatísticas consolidadas de todos os telhados"
 )
-async def obter_estatisticas(
-    periodo: Optional[str] = Query(None, description="Período (ex: 2025-01)")
-) -> EstatisticasSegmentacaoResponse:
+def obter_estatisticas(
+    periodo: Optional[str] = Query(None, description="Período (ex: 2025-01)"),
+    service: TelhadoService = Depends(get_telhado_service)
+) -> EstatisticasSimples:
     """
-    Calcula e retorna estatísticas agregadas
+    Calcula e retorna estatísticas agregadas.
+    
+    Args:
+        periodo: Período no formato YYYY-MM
+    
+    Returns:
+        EstatisticasSimples com estatísticas consolidadas
     """
     try:
-        # Período padrão: mês atual
-        if not periodo:
-            periodo = datetime.now().strftime("%Y-%m")
+        stats = service.obter_estatisticas_gerais(periodo)
         
-        # Agregar dados
-        total_subestacoes = set()
-        total_telhados_detectados = 0
-        total_telhados_segmentados = 0
-        total_imagens = 0
-        
-        confiancas = []
-        qualidades = []
-        areas = []
-        tipos_edificios = {}
-        tempos_processamento = []
-        
-        for resultado in _resultados_processamento.values():
-            total_subestacoes.add(resultado.id_subestacao)
-            total_telhados_detectados += resultado.telhados_detectados
-            total_telhados_segmentados += resultado.total_telhados_segmentados
-            total_imagens += 1
-            tempos_processamento.append(resultado.tempo_processamento_segundos)
-            
-            for telhado in resultado.telhados:
-                confiancas.append(telhado.confianca)
-                qualidades.append(telhado.propriedades_adicionais.get('indice_qualidade', 0.5))
-                areas.append(telhado.area_m2)
-                
-                tipo = telhado.tipo_edificio
-                tipos_edificios[tipo] = tipos_edificios.get(tipo, 0) + 1
-        
-        # Calcular médias
-        media_confianca = sum(confiancas) / len(confiancas) if confiancas else 0
-        media_qualidade = sum(qualidades) / len(qualidades) if qualidades else 0
-        media_area = sum(areas) / len(areas) if areas else 0
-        media_tempo = sum(tempos_processamento) / len(tempos_processamento) if tempos_processamento else 0
-        tempo_total = sum(tempos_processamento)
-        
-        taxa_sucesso = 100.0  # Simplificado
-        
-        return EstatisticasSegmentacaoResponse(
-            periodo=periodo,
-            total_subestacoes_processadas=len(total_subestacoes),
-            total_telhados_detectados=total_telhados_detectados,
-            total_telhados_segmentados=total_telhados_segmentados,
-            total_imagens_processadas=total_imagens,
-            media_telhados_por_subestacao=(total_telhados_detectados / len(total_subestacoes)) if total_subestacoes else 0,
-            media_confianca_deteccao=media_confianca,
-            media_indice_qualidade=media_qualidade,
-            media_area_telhado_m2=media_area,
-            distribuicao_tipo_edificio=tipos_edificios,
-            tempo_medio_processamento_segundos=media_tempo,
-            tempo_total_processamento_segundos=tempo_total,
-            taxa_sucesso_percentual=taxa_sucesso
+        return EstatisticasSimples(
+            total_subestacoes_processadas=stats.get('total_subestacoes', 0),
+            total_telhados_detectados=stats.get('total_telhados', 0),
+            media_confianca_deteccao=float(stats.get('confianca_media', 0.0)),
+            media_area_telhado_m2=float(stats.get('area_media_m2', 0.0)),
+            confianca_minima=float(stats.get('confianca_minima', 0.0)),
+            confianca_maxima=float(stats.get('confianca_maxima', 1.0)),
+            area_minima_m2=float(stats.get('area_minima_m2', 0.0)),
+            area_maxima_m2=float(stats.get('area_maxima_m2', 0.0)),
+            primeira_deteccao=stats.get('primeira_deteccao'),
+            ultima_deteccao=stats.get('ultima_deteccao')
         )
         
     except Exception as e:
-        logger.error(f"Erro ao calcular estatísticas: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ============================================================================
-# FUNÇÕES AUXILIARES
-# ============================================================================
-
-def _converter_resultado_para_response(resultado: ResultadoProcessamentoTelhados) -> ResultadoSegmentacaoResponse:
-    """Converte ResultadoProcessamentoTelhados para Pydantic model"""
-    telhados_response = [_converter_telhado_para_response(t) for t in resultado.telhados]
-    
-    return ResultadoSegmentacaoResponse(
-        id_subestacao=resultado.id_subestacao,
-        id_imagem_satelite=resultado.id_imagem_satelite,
-        timestamp_processamento=resultado.timestamp_processamento,
-        telhados_detectados=resultado.telhados_detectados,
-        telhados_segmentados=resultado.total_telhados_segmentados,
-        tempo_processamento_segundos=resultado.tempo_processamento_segundos,
-        telhados=telhados_response,
-        erros=resultado.erros,
-        avisos=resultado.avisos,
-        sucesso=len(resultado.erros) == 0,
-        mensagem="Processamento concluído com sucesso" if len(resultado.erros) == 0 else "Processamento com erros"
-    )
-
-
-def _converter_telhado_para_response(telhado) -> TelhadoDetectadoResponse:
-    """Converte TelhadoDetectado para Pydantic model"""
-    from backend.src.schemas.telhado import (
-        BoundingBoxPixeis, CentroidePixeis, CoordenadaGeografica
-    )
-    
-    bbox_pixeis = BoundingBoxPixeis(
-        x=int(telhado.bbox["x"]),
-        y=int(telhado.bbox["y"]),
-        largura=int(telhado.bbox["w"]),
-        altura=int(telhado.bbox["h"])
-    )
-    
-    centroide = CentroidePixeis(
-        x=telhado.centroide["x"],
-        y=telhado.centroide["y"]
-    )
-    
-    coord = CoordenadaGeografica(
-        latitude=telhado.lat,
-        longitude=telhado.lon
-    ) if telhado.lat != 0 else None
-    
-    return TelhadoDetectadoResponse(
-        id_telhado=telhado.id_telhado,
-        id_subestacao=telhado.id_subestacao,
-        id_imagem_satelite=telhado.id_imagem_satelite,
-        bbox=bbox_pixeis,
-        centroide=centroide,
-        coordenada_geografica=coord,
-        area_pixeis=telhado.area_pixeis,
-        area_m2=telhado.area_m2,
-        confianca=telhado.confianca,
-        tipo_edificio=telhado.tipo_edificio,
-        percentual_cobertura=telhado.propriedades_adicionais.get('percentual_cobertura'),
-        indice_qualidade=telhado.propriedades_adicionais.get('indice_qualidade'),
-        timestamp_deteccao=telhado.timestamp_deteccao,
-        modelo_deteccao=telhado.modelo_deteccao,
-        propriedades_adicionais=telhado.propriedades_adicionais
-    )
-
-
-# ============================================================================
-# ENDPOINTS PARA TRANSFORMADORES
-# ============================================================================
-
-@router.get("/transformador/{id}/telhados")
-def listar_telhados_transformador(
-    id: int = Path(..., description="ID do transformador")
-):
-    """
-    Lista todos os telhados detectados para um transformador.
-    
-    Retorna histórico de detecções com maior confiança.
-    """
-    try:
-        from ..core import get_engine
-        engine = get_engine()
-        
-        with engine.begin() as conn:
-            result = conn.execute(text("""
-                SELECT 
-                    id, transformador_id, subestacao_id, latitude, longitude,
-                    area_m2, confianca, bbox_json, timestamp_deteccao
-                FROM telhados_detectados_transformador
-                WHERE transformador_id = :trans_id
-                ORDER BY timestamp_deteccao DESC
-                LIMIT 100
-            """), {'trans_id': id})
-            
-            telhados = []
-            for row in result:
-                telhados.append({
-                    'id': row[0],
-                    'transformador_id': row[1],
-                    'subestacao_id': row[2],
-                    'latitude': float(row[3]),
-                    'longitude': float(row[4]),
-                    'area_m2': float(row[5]),
-                    'confianca': float(row[6]),
-                    'bbox': json.loads(row[7]) if row[7] else {},
-                    'timestamp': row[8].isoformat() if row[8] else None
-                })
-            
-            return {
-                "transformador_id": id,
-                "total": len(telhados),
-                "telhados": telhados
-            }
-    
-    except Exception as e:
-        logger.error(f"Erro ao listar telhados: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/subestacao/{id}/telhados-transformadores")
-def obter_estatisticas_telhados_subestacao(
-    id: int = Path(..., description="ID da subestação")
-):
-    """
-    Obtém estatísticas agregadas de telhados para todos os 
-    transformadores de uma subestação.
-    
-    - Total de transformadores
-    - Total de telhados detectados
-    - Área total coberta
-    - Distribuição por tipo de edificio
-    """
-    try:
-        from ..core import get_engine
-        engine = get_engine()
-        
-        with engine.begin() as conn:
-            # Estatísticas gerais
-            result = conn.execute(text("""
-                SELECT 
-                    COUNT(DISTINCT transformador_id) as transformadores,
-                    COUNT(DISTINCT id) as total_telhados,
-                    SUM(area_m2) as area_total_m2,
-                    AVG(confianca) as confianca_media
-                FROM telhados_detectados_transformador
-                WHERE subestacao_id = :sub_id
-            """), {'sub_id': id})
-            
-            row = result.fetchone()
-            
-            return {
-                "subestacao_id": id,
-                "transformadores_processados": row[0] or 0,
-                "total_telhados": row[1] or 0,
-                "area_total_m2": float(row[2]) if row[2] else 0,
-                "confianca_media": float(row[3]) if row[3] else 0,
-                "timestamp": datetime.now().isoformat()
-            }
-    
-    except Exception as e:
         logger.error(f"Erro ao obter estatísticas: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# ENDPOINT 4: Telhados de um Transformador
+# ============================================================================
+
+@router.get(
+    "/transformador/{id_transformador}/telhados",
+    response_model=TelhadosTransformadorResponse,
+    summary="Telhados de um transformador específico",
+    description="Retorna todos os telhados detectados em um transformador"
+)
+def obter_telhados_transformador(
+    id_transformador: int = Path(..., description="ID do transformador"),
+    service: TelhadoService = Depends(get_telhado_service)
+) -> TelhadosTransformadorResponse:
+    """
+    Obtém telhados de um transformador específico.
+    
+    Args:
+        id_transformador: ID do transformador
+    
+    Returns:
+        TelhadosTransformadorResponse com telhados e estatísticas
+    """
+    try:
+        resultado = service.obter_telhados_transformador(id_transformador)
+        
+        # Converter telhados
+        telhados_response = []
+        for telhado in resultado.get('telhados', []):
+            telhados_response.append(TelhadoSimples(
+                id_telhado=telhado['id'],
+                transformador_id=telhado['transformador_id'],
+                subestacao_id=telhado['subestacao_id'],
+                latitude=telhado['latitude'],
+                longitude=telhado['longitude'],
+                area_m2=telhado['area_m2'],
+                confianca=telhado['confianca'],
+                timestamp_deteccao=telhado['timestamp_deteccao'],
+                transformador_codigo=telhado.get('transformador_codigo')
+            ))
+        
+        return TelhadosTransformadorResponse(
+            transformador_id=id_transformador,
+            total=resultado['total'],
+            area_total_m2=resultado['area_total_m2'],
+            confianca_media=resultado['confianca_media'],
+            telhados=telhados_response
+        )
+        
+    except Exception as e:
+        logger.error(f"Erro ao obter telhados transformador: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# ENDPOINT 5: Estatísticas de Uma Subestação
+# ============================================================================
+
+@router.get(
+    "/subestacao/{id_subestacao}/telhados-transformadores",
+    response_model=EstatisticasSubestacao,
+    summary="Estatísticas agregadas de uma subestação",
+    description="Retorna estatísticas consolidadas de telhados por subestação"
+)
+def obter_estatisticas_subestacao(
+    id_subestacao: int = Path(..., description="ID da subestação"),
+    service: TelhadoService = Depends(get_telhado_service)
+) -> EstatisticasSubestacao:
+    """
+    Obtém estatísticas agregadas de uma subestação.
+    
+    Args:
+        id_subestacao: ID da subestação
+    
+    Returns:
+        EstatisticasSubestacao com dados consolidados
+    """
+    try:
+        resultado = service.obter_estatisticas_subestacao(id_subestacao)
+        
+        return EstatisticasSubestacao(
+            subestacao_id=id_subestacao,
+            transformadores=resultado.get('transformadores', 0),
+            total_telhados=resultado.get('total_telhados', 0),
+            area_total_m2=resultado.get('area_total_m2', 0.0),
+            confianca_media=resultado.get('confianca_media', 0.0)
+        )
+        
+    except Exception as e:
+        logger.error(f"Erro ao obter estatísticas subestação: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# ENDPOINT 6: Obter Telhado Específico (NOVO)
+# ============================================================================
+
+@router.get(
+    "/{telhado_id}",
+    response_model=TelhadoSimples,
+    summary="Obter telhado específico",
+    description="Retorna detalhes de um telhado específico"
+)
+def obter_telhado(
+    telhado_id: int = Path(..., description="ID do telhado"),
+    service: TelhadoService = Depends(get_telhado_service)
+) -> TelhadoSimples:
+    """
+    Obtém detalhes de um telhado específico.
+    
+    Args:
+        telhado_id: ID do telhado
+    
+    Returns:
+        TelhadoSimples com detalhes do telhado
+    """
+    try:
+        telhado = service.obter_telhado(telhado_id)
+        
+        if not telhado:
+            raise HTTPException(status_code=404, detail=f"Telhado {telhado_id} não encontrado")
+        
+        return TelhadoSimples(
+            id_telhado=telhado['id'],
+            transformador_id=telhado['transformador_id'],
+            subestacao_id=telhado['subestacao_id'],
+            latitude=telhado['latitude'],
+            longitude=telhado['longitude'],
+            area_m2=telhado['area_m2'],
+            confianca=telhado['confianca'],
+            timestamp_deteccao=telhado['timestamp_deteccao'],
+            transformador_codigo=telhado.get('transformador_codigo'),
+            subestacao_codigo=telhado.get('subestacao_codigo')
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro ao obter telhado: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
