@@ -1,35 +1,25 @@
 """
-Serviço de Pipeline de Transformadores
-Lógica de orquestração: Baixa imagens, detecta telhados e painéis
+Transformador Pipeline Application Service (DDD)
 
-ARQUITETURA (refatoração 2026-02-04):
-- RoofDetectionService: Camada de infraestrutura (apenas ML - detecção/segmentação)
-- RoofService: Camada de aplicação (wrapper/orquestração com RoofDetectionService)
-- TransformadorPipelineService: Lógica de negócio (este arquivo)
+Orchestrates the complete pipeline for transformer processing:
+1. Image grid generation and caching
+2. Roof detection across images
+3. Solar panel detection on roofs
+4. Power estimation and persistence
 
-Database Schema: ANEEL BDGD (infrastructure/database/schema_aneel_bdgd.sql)
-Workflow:
-  1. Busca transformador em transformadores_aneel (ativo = TRUE)
-  2. Gera grid 3x3 de imagens de satélite
-  3. Para cada imagem:
-     - Baixa e caches em data/cache/imagens_grid/
-     - Detecta telhados (RoofService → RoofDetectionService)
-     - Registra em telhados_detectados_transformador
-     - Para cada telhado:
-       - Detecta painéis (PainelSolarDetectionService)
-       - Salva em paineis_solares_detectados
-       - Calcula potência e salva em potencia_telhados
-  4. Acumula totais e retorna resultado consolidado
+This service acts as the Application Layer coordinator, orchestrating
+domain entities (Transformador) and infrastructure services (detection, 
+caching, persistence).
 
-Tabelas utilizadas:
-  - transformadores_aneel: Leitura (lat/lon/status)
-  - telhados_detectados_transformador: Escrita
-  - paineis_solares_detectados: Escrita
-  - potencia_telhados: Escrita
-  - satelite_requisicoes_google_maps: Escrita (rastreamento)
+Architecture:
+- Domain Layer: Transformador entity, value objects, repository interface
+- Application Layer: This service + use cases
+- Infrastructure Layer: TelhadoDetectionService, PainelSolarApplicationService, 
+  image caching, database persistence
+- API Layer: Endpoints that consume this service
 
 Author: Energy Netload Monitor
-Date: 2026-02-04 (Refactored with RoofDetectionService separation)
+Date: 2026-02-05 (DDD Migration)
 """
 
 import json
@@ -44,127 +34,162 @@ import requests
 import cv2
 from PIL import Image
 
-from ..infrastructure.persistence.transformador_pipeline import TransformadorPipelineRepository
-from ..application.telhado_detection.service import TelhadoDetectionService
-from ..application.painel_solar import PainelSolarApplicationService
-from ..schemas.painel_solar import (
+from ...infrastructure.persistence.transformador_pipeline import TransformadorPipelineRepository
+from ...application.telhado_detection.service import TelhadoDetectionService
+from ...application.painel_solar import PainelSolarApplicationService
+from ...schemas.painel_solar import (
     PainelSolarResponse,
     EstimativaPotenciaResponse,
     TelhadorComPaineis,
 )
 
 
-class TransformadorPipelineService:
+class TransformadorPipelineApplicationService:
     """
-    Serviço de pipeline de transformadores.
-    Responsável por: Orquestração, cache de imagens, processamento de telhados e painéis.
+    Application service for transformer pipeline processing.
+    
+    Responsibilities:
+    - Orchestrate complete pipeline workflow
+    - Manage image caching
+    - Coordinate roof and panel detection
+    - Persist results to database
+    - Provide domain-level abstractions to API layer
+    
+    Architecture Layer: APPLICATION LAYER (DDD)
+    Dependencies:
+    - Infrastructure: TransformadorPipelineRepository, image caching
+    - Domain: TelhadoDetectionService, PainelSolarApplicationService
+    - Schemas: Response DTOs
     """
 
     def __init__(self, engine):
         """
-        Inicializa o serviço.
+        Initialize the pipeline application service.
         
         Args:
-            engine: SQLAlchemy Engine
+            engine: SQLAlchemy Engine for database access
         """
         self.engine = engine
         self.repository = TransformadorPipelineRepository(engine)
         self.logger = logging.getLogger(__name__)
         
-        # Serviços de detecção (lazy loading)
+        # Lazy-loaded DDD services
         self._servico_telhados: Optional[TelhadoDetectionService] = None
         self._servico_paineis: Optional[PainelSolarApplicationService] = None
         
-        # Criar diretório de cache
+        # Initialize cache directory
         self.cache_dir = self._criar_dir_cache()
 
     # ========================================================================
-    # LAZY LOADING DE SERVIÇOS
+    # SERVICE LAZY LOADING (DDD COORDINATION)
     # ========================================================================
 
     def _obter_servico_telhados(self) -> TelhadoDetectionService:
-        """Obtém ou cria instância do serviço de detecção de telhados (DDD)."""
+        """
+        Lazy-load roof detection DDD service.
+        
+        Returns:
+            Initialized TelhadoDetectionService
+        """
         if self._servico_telhados is None:
-            self.logger.info("🔧 Inicializando serviço DDD de detecção de telhados...")
+            self.logger.info("🔧 Initializing DDD roof detection service...")
             self._servico_telhados = TelhadoDetectionService(engine=self.engine)
         return self._servico_telhados
 
     def _obter_servico_paineis(self) -> PainelSolarApplicationService:
-        """Obtém ou cria instância do serviço DDD de painéis solares."""
+        """
+        Lazy-load solar panel detection DDD service.
+        
+        Returns:
+            Initialized PainelSolarApplicationService
+        """
         if self._servico_paineis is None:
-            self.logger.info("🔧 Inicializando serviço DDD de detecção de painéis solares...")
+            self.logger.info("🔧 Initializing DDD solar panel detection service...")
             self._servico_paineis = PainelSolarApplicationService()
         return self._servico_paineis
 
     # ========================================================================
-    # GERENCIAMENTO DE CACHE DE IMAGENS
+    # IMAGE CACHE MANAGEMENT
     # ========================================================================
 
     def _criar_dir_cache(self) -> Path:
-        """Cria diretório de cache se não existir."""
+        """
+        Create cache directory for satellite images if it doesn't exist.
+        
+        Returns:
+            Path to cache directory
+        """
         cache_dir = Path("data/cache/imagens_grid")
         cache_dir.mkdir(parents=True, exist_ok=True)
         return cache_dir
 
-    def _salvar_imagem_em_cache(self, url_imagem: str, transformador_id: int, indice: int) -> Optional[str]:
+    def _salvar_imagem_em_cache(self, 
+                                url_imagem: str, 
+                                transformador_id: int, 
+                                indice: int) -> Optional[str]:
         """
-        Baixa e salva imagem em cache.
+        Download and cache satellite image locally.
+        
+        Implements lazy caching: returns existing cache before downloading new image.
         
         Args:
-            url_imagem: URL da imagem
-            transformador_id: ID do transformador
-            indice: Índice da imagem no grid
+            url_imagem: Image URL (Google Maps or CBERS-4A)
+            transformador_id: Transformer ID
+            indice: Image index in grid
             
         Returns:
-            Caminho da imagem salva ou None se erro
+            Path to cached image or None on error
         """
         try:
             filename = f"trafo_{transformador_id}_img_{indice:03d}.png"
             filepath = self.cache_dir / filename
             
-            # Se já existe, usar
+            # Check cache first
             if filepath.exists():
-                self.logger.info(f"[CACHE] 💾 Imagem encontrada em cache: {filepath}")
+                self.logger.info(f"[CACHE] 💾 Image found in cache: {filepath}")
                 return str(filepath)
             
-            # Baixar imagem
-            self.logger.info(f"[CACHE] 📥 Baixando imagem {indice}...")
+            # Download image
+            self.logger.info(f"[CACHE] 📥 Downloading image {indice}...")
             response = requests.get(url_imagem, timeout=30)
             response.raise_for_status()
             
-            # Salvar em disco
+            # Save to disk
             imagem = Image.open(BytesIO(response.content))
             if imagem.mode != 'RGB':
                 imagem = imagem.convert('RGB')
             
             imagem.save(filepath)
-            self.logger.info(f"[CACHE] ✅ Imagem salva em: {filepath}")
+            self.logger.info(f"[CACHE] ✅ Image saved: {filepath}")
             
             return str(filepath)
         
         except Exception as e:
-            self.logger.error(f"[CACHE] ❌ Erro ao salvar imagem em cache: {e}")
+            self.logger.error(f"[CACHE] ❌ Error saving image to cache: {e}")
             return None
 
     def _carregar_imagem_do_cache(self, caminho_imagem: str):
         """
-        Carrega imagem do disco como numpy array.
+        Load cached image as numpy array.
         
+        Args:
+            caminho_imagem: Path to cached image
+            
         Returns:
-            numpy array ou None se erro
+            Numpy array or None on error
         """
         try:
             img = cv2.imread(caminho_imagem)
             if img is None:
-                self.logger.error(f"[CACHE] ❌ Não foi possível carregar: {caminho_imagem}")
+                self.logger.error(f"[CACHE] ❌ Failed to load: {caminho_imagem}")
                 return None
             return img
         except Exception as e:
-            self.logger.error(f"[CACHE] ❌ Erro ao carregar imagem: {e}")
+            self.logger.error(f"[CACHE] ❌ Error loading image: {e}")
             return None
 
     # ========================================================================
-    # PROCESSAMENTO DE PAINÉIS
+    # PANEL PROCESSING
     # ========================================================================
 
     def _processar_telhado_para_paineis(self, 
@@ -175,15 +200,28 @@ class TransformadorPipelineService:
                                         confianca_minima: float,
                                         potencia_por_m2: float) -> Dict:
         """
-        Detecta painéis em um telhado específico.
+        Detect solar panels on a specific roof.
         
+        Coordinates with PainelSolarApplicationService (DDD layer) to:
+        1. Detect panels in roof bounding box
+        2. Calculate power estimation
+        3. Format results as response DTOs
+        
+        Args:
+            telhado_id: Roof ID
+            caminho_imagem: Path to cached image
+            bbox: Roof bounding box
+            transformador_id: Transformer ID
+            confianca_minima: Minimum confidence threshold
+            potencia_por_m2: Power per square meter (W)
+            
         Returns:
-            Dict com resultado do processamento
+            Dict with 'sucesso', 'num_paineis', 'paineis', 'potencia', 'potencia_dict'
         """
         try:
             servico_paineis = self._obter_servico_paineis()
             
-            # Processar telhado para painéis (DDD)
+            # Process roof for panels (DDD service)
             resultado_paineis = servico_paineis.processar_telhado_completo(
                 url_imagem=caminho_imagem,
                 bbox=bbox,
@@ -194,7 +232,7 @@ class TransformadorPipelineService:
             if not resultado_paineis.sucesso or not resultado_paineis.paineis:
                 return {'sucesso': False, 'num_paineis': 0}
             
-            # Formatar painéis para resposta (converter DTOs para schemas)
+            # Format panels as response DTOs
             paineis_response = [
                 PainelSolarResponse(
                     id_painel=p.id_painel,
@@ -227,7 +265,7 @@ class TransformadorPipelineService:
             }
         
         except Exception as e:
-            self.logger.error(f"Erro ao processar telhado para painéis: {e}")
+            self.logger.error(f"Error processing roof for panels: {e}")
             return {'sucesso': False, 'num_paineis': 0}
 
     def _salvar_paineis_do_telhado(self,
@@ -236,25 +274,36 @@ class TransformadorPipelineService:
                                    paineis_response: List[PainelSolarResponse],
                                    potencia_response: Optional[EstimativaPotenciaResponse]) -> bool:
         """
-        Salva painéis e potência do telhado no banco.
+        Save detected panels and power estimates to database.
         
+        Persists:
+        - Individual panels with bounding boxes and confidence
+        - Power estimates per roof
+        - Aggregated power estimates
+        
+        Args:
+            telhado_id: Roof ID
+            transformador_id: Transformer ID
+            paineis_response: List of detected panels (DTOs)
+            potencia_response: Power estimate DTO
+            
         Returns:
-            True se sucesso
+            True if successful, False on error
         """
         try:
-            # Buscar dados do telhado
+            # Fetch roof data
             telhado_data = self.repository.obter_telhado_por_id(telhado_id)
             if not telhado_data:
-                self.logger.error(f"Telhado {telhado_id} não encontrado")
+                self.logger.error(f"Roof {telhado_id} not found")
                 return False
             
             trans_id = telhado_data['transformador_id']
             sub_id = telhado_data['subestacao_id']
             
-            # Limpar painéis antigos
+            # Clear old panels
             self.repository.limpar_paineis_do_telhado(telhado_id)
             
-            # Preparar lista de painéis para inserção
+            # Prepare panel data for batch insertion
             paineis_data = []
             for painel in paineis_response:
                 potencia_w = painel.area_m2 * 150.0
@@ -273,11 +322,11 @@ class TransformadorPipelineService:
                     'timestamp': painel.timestamp_deteccao
                 })
             
-            # Salvar painéis em lote
+            # Save panels in batch
             if paineis_data:
                 self.repository.salvar_paineis_lote(paineis_data)
             
-            # Salvar potência
+            # Save power estimates
             if potencia_response:
                 self.repository.limpar_potencia_do_telhado(telhado_id)
                 
@@ -295,15 +344,15 @@ class TransformadorPipelineService:
                 
                 self.repository.salvar_potencia_telhado(potencia_data)
             
-            self.logger.info(f"✅ {len(paineis_response)} painéis salvos para telhado {telhado_id}")
+            self.logger.info(f"✅ {len(paineis_response)} panels saved for roof {telhado_id}")
             return True
         
         except Exception as e:
-            self.logger.error(f"Erro ao salvar painéis do telhado: {e}")
+            self.logger.error(f"Error saving roof panels: {e}")
             return False
 
     # ========================================================================
-    # PIPELINE PRINCIPAL
+    # MAIN PIPELINE ORCHESTRATION
     # ========================================================================
 
     def processar_transformador_completo(self,
@@ -311,61 +360,78 @@ class TransformadorPipelineService:
                                          confianca_minima_telhados: float = 0.5,
                                          confianca_minima_paineis: float = 0.5) -> Dict:
         """
-        Pipeline completo: Baixa imagens, detecta telhados e painéis.
+        Execute complete pipeline: Download images → Detect roofs → Detect panels.
+        
+        Workflow:
+        1. Retrieve transformer coordinates and metadata
+        2. Generate 3x3 grid of satellite images
+        3. For each image:
+           a. Download and cache satellite image
+           b. Detect roofs using TelhadoDetectionService (DDD)
+           c. For each roof, detect panels using PainelSolarApplicationService (DDD)
+           d. Save results to database
+        4. Aggregate and return consolidated results
         
         Args:
-            transformador_id: ID do transformador
-            confianca_minima_telhados: Confiança mínima para telhados
-            confianca_minima_paineis: Confiança mínima para painéis
+            transformador_id: Transformer ID to process
+            confianca_minima_telhados: Minimum confidence for roof detection (0-1)
+            confianca_minima_paineis: Minimum confidence for panel detection (0-1)
             
         Returns:
-            Dict com resultado do pipeline
+            Dict with pipeline results including:
+            - sucesso: Pipeline success status
+            - total_telhados_detectados: Total roofs detected
+            - total_paineis_detectados: Total panels detected
+            - telhados_com_paineis: List of roofs with panels
+            - potencia_total: Aggregated power estimate
+            - erros: List of errors encountered
+            - tempo_processamento_s: Processing time in seconds
         """
         tempo_inicio = time.time()
         
         try:
-            self.logger.info(f"🚀 Iniciando pipeline para transformador {transformador_id}")
+            self.logger.info(f"🚀 Starting pipeline for transformer {transformador_id}")
             
-            # Obter serviços
+            # Get DDD services
             servico_telhados = self._obter_servico_telhados()
             
-            # Buscar transformador
+            # Fetch transformer
             trafo_data = self.repository.obter_transformador(transformador_id)
             if not trafo_data:
-                self.logger.error(f"Transformador {transformador_id} não encontrado")
+                self.logger.error(f"Transformer {transformador_id} not found")
                 return {
                     'sucesso': False,
-                    'erro': f'Transformador {transformador_id} não encontrado'
+                    'erro': f'Transformer {transformador_id} not found'
                 }
             
             lat_trafo = trafo_data['latitude']
             lon_trafo = trafo_data['longitude']
             subestacao_id = trafo_data['subestacao_id']
             
-            self.logger.info(f"📍 Transformador: lat={lat_trafo}, lon={lon_trafo}")
+            self.logger.info(f"📍 Transformer: lat={lat_trafo}, lon={lon_trafo}")
             
-            # Gerar grid de imagens
-            self.logger.info("🗺️ Gerando grid de imagens...")
+            # Generate image grid
+            self.logger.info("🗺️ Generating image grid...")
             imagens_grid = servico_telhados.gerar_imagens_grid(lat_trafo, lon_trafo)
-            self.logger.info(f"✓ {len(imagens_grid)} imagens encontradas")
+            self.logger.info(f"✓ {len(imagens_grid)} images found")
             
-            # Limpar dados antigos
+            # Clear old data
             self.repository.limpar_paineis_do_transformador(transformador_id)
             self.repository.limpar_potencia_do_transformador(transformador_id)
             
-            # Variáveis de acumulação
+            # Accumulation variables
             total_telhados = 0
             total_paineis = 0
             todos_telhados_com_paineis = []
             potencia_total = None
             erros = []
             
-            # Processar cada imagem do grid
+            # Process each image in grid
             for idx, imagem in enumerate(imagens_grid, 1):
                 try:
-                    self.logger.info(f"⏳ Processando imagem {idx}/{len(imagens_grid)}")
+                    self.logger.info(f"⏳ Processing image {idx}/{len(imagens_grid)}")
                     
-                    # ====== ETAPA 1: BAIXAR E CACHEAR IMAGEM ======
+                    # ====== STAGE 1: DOWNLOAD AND CACHE IMAGE ======
                     caminho_imagem = self._salvar_imagem_em_cache(
                         imagem['url'], 
                         transformador_id, 
@@ -373,10 +439,10 @@ class TransformadorPipelineService:
                     )
                     
                     if not caminho_imagem:
-                        erros.append(f"Imagem {idx}: Erro ao salvar em cache")
+                        erros.append(f"Image {idx}: Error saving to cache")
                         continue
                     
-                    # Salvar referência no banco
+                    # Save image reference to database
                     self.repository.salvar_referencia_imagem(
                         transformador_id, 
                         idx, 
@@ -384,8 +450,8 @@ class TransformadorPipelineService:
                         caminho_imagem
                     )
                     
-                    # ====== ETAPA 2: DETECTAR TELHADOS ======
-                    self.logger.info(f"🏠 Detectando telhados...")
+                    # ====== STAGE 2: DETECT ROOFS ======
+                    self.logger.info(f"🏠 Detecting roofs...")
                     
                     resultado_telhados = servico_telhados.processar_telhados_lote(
                         caminho_imagem,
@@ -399,19 +465,19 @@ class TransformadorPipelineService:
                     
                     if resultado_telhados['sucesso']:
                         num_telhados = resultado_telhados['total_telhados_segmentados']
-                        self.logger.info(f"✅ {num_telhados} telhados detectados")
+                        self.logger.info(f"✅ {num_telhados} roofs detected")
                         total_telhados += num_telhados
                     
-                    # ====== ETAPA 3: DETECTAR PAINÉIS NOS TELHADOS ======
+                    # ====== STAGE 3: DETECT PANELS ON ROOFS ======
                     if resultado_telhados['sucesso'] and resultado_telhados['telhados_segmentados']:
-                        self.logger.info(f"☀️ Detectando painéis nos telhados...")
+                        self.logger.info(f"☀️ Detecting panels on roofs...")
                         
                         for telhado in resultado_telhados['telhados_segmentados']:
                             try:
                                 telhado_id = telhado['id']
                                 bbox = telhado['bbox']
                                 
-                                # Processar painéis
+                                # Process panels on roof
                                 resultado_paineis = self._processar_telhado_para_paineis(
                                     telhado_id=telhado_id,
                                     caminho_imagem=caminho_imagem,
@@ -423,10 +489,10 @@ class TransformadorPipelineService:
                                 
                                 if resultado_paineis['sucesso']:
                                     num_paineis = resultado_paineis['num_paineis']
-                                    self.logger.info(f"✅ {num_paineis} painéis detectados no telhado {telhado_id}")
+                                    self.logger.info(f"✅ {num_paineis} panels detected on roof {telhado_id}")
                                     total_paineis += num_paineis
                                     
-                                    # Salvar painéis no banco
+                                    # Save panels to database
                                     self._salvar_paineis_do_telhado(
                                         telhado_id=telhado_id,
                                         transformador_id=transformador_id,
@@ -434,7 +500,7 @@ class TransformadorPipelineService:
                                         potencia_response=resultado_paineis['potencia']
                                     )
                                     
-                                    # Acumular potência total
+                                    # Accumulate total power
                                     if resultado_paineis['potencia_dict']:
                                         if potencia_total is None:
                                             potencia_total = resultado_paineis['potencia_dict'].copy()
@@ -446,7 +512,7 @@ class TransformadorPipelineService:
                                             potencia_total['producao_anual_kwh'] += resultado_paineis['potencia_dict']['producao_anual_kwh']
                                             potencia_total['economia_anual_brl'] += resultado_paineis['potencia_dict']['economia_anual_brl']
                                     
-                                    # Construir resposta de telhado
+                                    # Build roof response
                                     todos_telhados_com_paineis.append(
                                         TelhadorComPaineis(
                                             telhado_id=telhado_id,
@@ -459,25 +525,25 @@ class TransformadorPipelineService:
                                         )
                                     )
                                 else:
-                                    self.logger.info(f"⚪ Nenhum painel no telhado {telhado_id}")
+                                    self.logger.info(f"⚪ No panels on roof {telhado_id}")
                             
                             except Exception as e:
-                                self.logger.error(f"Erro ao processar telhado: {e}")
-                                erros.append(f"Telhado: {str(e)}")
+                                self.logger.error(f"Error processing roof: {e}")
+                                erros.append(f"Roof: {str(e)}")
                 
                 except Exception as e:
-                    self.logger.error(f"Erro na imagem {idx}: {e}")
-                    erros.append(f"Imagem {idx}: {str(e)}")
+                    self.logger.error(f"Error on image {idx}: {e}")
+                    erros.append(f"Image {idx}: {str(e)}")
             
-            # Compilar resposta final
+            # Compile final response
             potencia_response = None
             if potencia_total:
                 potencia_response = EstimativaPotenciaResponse(**potencia_total)
             
             tempo_decorrido = time.time() - tempo_inicio
             
-            self.logger.info(f"✅ Pipeline concluído em {tempo_decorrido:.2f}s")
-            self.logger.info(f"📊 Total: {total_telhados} telhados, {total_paineis} painéis")
+            self.logger.info(f"✅ Pipeline completed in {tempo_decorrido:.2f}s")
+            self.logger.info(f"📊 Total: {total_telhados} roofs, {total_paineis} panels")
             
             return {
                 'sucesso': len(erros) == 0,
@@ -493,7 +559,7 @@ class TransformadorPipelineService:
             }
         
         except Exception as e:
-            self.logger.error(f"❌ Erro no pipeline: {e}", exc_info=True)
+            self.logger.error(f"❌ Pipeline error: {e}", exc_info=True)
             return {
                 'sucesso': False,
                 'transformador_id': transformador_id,
