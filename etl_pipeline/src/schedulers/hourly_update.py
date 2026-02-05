@@ -25,7 +25,7 @@ project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root / "backend"))
 sys.path.insert(0, str(project_root / "etl_pipeline"))
 
-from src.extractors.ons_client import load_carga_ons
+from etl_pipeline.src.extractors.ons_subsistema_client import load_carga_ons
 from src.extractors.inpe_weather_client import load_weather_data
 
 logger = logging.getLogger(__name__)
