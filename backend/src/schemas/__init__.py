@@ -10,6 +10,19 @@ from .analise import (
     ResumoGranular,
 )
 from .common import GeoJSONFeature, GeoJSONResponse, QueryParams
+from .satelite import (
+    BoundingBoxModel,
+    CoordenadasGeograficas,
+    ConsultaSateliteRequest,
+    DadosSatelliteSubestacao,
+    ImagemSateliteMetadata,
+    ListaImagensSatelite,
+    PeriodoTemporal,
+    RegistrarImagemRequest,
+    RegistrarImagemResponse,
+    URLSTACQuery,
+    URLWMSQuery,
+)
 from .subestacao import (
     AtualizarDetectadasRequest,
     AtualizarDetectadasResponse,
@@ -17,6 +30,14 @@ from .subestacao import (
     SubestacaoONSResponse,
     SubestacaoResumo,
     TaskAsyncResponse,
+)
+from .telhado import (
+    TelhadoSimples,
+    ListaTelhadosSimples,
+    EstatisticasSimples,
+    TelhadosTransformadorResponse,
+    EstatisticasSubestacao,
+    DetalhesSubestacao,
 )
 
 __all__ = [
@@ -31,12 +52,31 @@ __all__ = [
     "AtualizarDetectadasRequest",
     "AtualizarDetectadasResponse",
     "TaskAsyncResponse",
+    # Satelite
+    "CoordenadasGeograficas",
+    "BoundingBoxModel",
+    "PeriodoTemporal",
+    "URLSTACQuery",
+    "URLWMSQuery",
+    "DadosSatelliteSubestacao",
+    "ImagemSateliteMetadata",
+    "ListaImagensSatelite",
+    "RegistrarImagemRequest",
+    "RegistrarImagemResponse",
+    "ConsultaSateliteRequest",
     # Analise
     "CargaOcultaItem",
     "ClasseConsumoItem",
     "AlertaFraude",
     "EstabelecimentoContagem",
     "ResumoGranular",
+    # Telhado
     "PerfilCarga",
     "PerfisResponse",
+    "TelhadoSimples",
+    "ListaTelhadosSimples",
+    "EstatisticasSimples",
+    "TelhadosTransformadorResponse",
+    "EstatisticasSubestacao",
+    "DetalhesSubestacao",
 ]

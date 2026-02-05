@@ -13,6 +13,8 @@ Focamos nas UCs para obter mix real de consumidores por região.
 """
 
 import logging
+import os
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -35,11 +37,24 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-from ..core.config import get_settings
-from ..core.db import get_db_url
+import sys
+if '/app/src' not in sys.path:
+    sys.path.insert(0, '/app/src')
+
+try:
+    from ..core.config import load_settings
+    from ..core.db import create_db_engine
+except (ImportError, ValueError):
+    from core.config import load_settings
+    from core.db import create_db_engine
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
+settings = load_settings()
+
+# Obter URL do banco
+db_url = os.getenv("DATABASE_URL") or settings.database.url
+if not db_url:
+    db_url = "postgresql://admin:admin123@db:5432/energy_monitor"
 
 Base = declarative_base()
 
@@ -224,7 +239,7 @@ def load_bdgd_data(gdf: gpd.GeoDataFrame) -> int:
     """
     logger.info("Carregando BDGD no banco de dados")
 
-    engine = create_engine(get_db_url())
+    engine = create_db_engine(db_url)
     Session = sessionmaker(bind=engine)
     session = Session()
 
