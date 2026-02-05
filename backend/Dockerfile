@@ -1,10 +1,13 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Instalar bibliotecas do sistema necessárias para GeoPandas/PostGIS
+# Instalar bibliotecas do sistema necessárias para GeoPandas/PostGIS e OpenCV
 RUN apt-get update && apt-get install -y \
-    libgdal-dev g++ --no-install-recommends && \
+    libgdal-dev g++ \
+    libgl1 \
+    libglib2.0-0 \
+    --no-install-recommends && \
     apt-get clean -y && \
     rm -rf /var/lib/apt/lists/*
 

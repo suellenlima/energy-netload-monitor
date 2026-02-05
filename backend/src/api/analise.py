@@ -3,9 +3,21 @@
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from ..application.analise import (
+    DetectarAnomalasUseCase,
+    ObtenerAlertaFraudeUseCase,
+    ObtenerAlertasHistoricoUseCase,
+    ObtenerCargaOcultaUseCase,
+    ObtenerClassesConsumoUseCase,
+    ObtenerContagemEstabelecimentosUseCase,
+    ObtenerEstadoAtualUseCase,
+    ObtenerPerfisCargaUseCase,
+    ObtenerResumoGranularUseCase,
+)
 from ..core import DatabaseError
+from ..infrastructure.persistence.analise import AnaliseRepositorySQLAlchemy
 from ..schemas import (
     AlertaFraude,
     CargaOcultaItem,
@@ -15,18 +27,24 @@ from ..schemas import (
     PerfisResponse,
     ResumoGranular,
 )
-from .deps import AnaliseRepoDepends, DistribuidoraQuery, SubsistemaQuery
+from .deps import DistribuidoraQuery, SubsistemaQuery
+from ..core.database import get_engine
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/analise", tags=["Análise"])
 
 
+def get_repository(engine=Depends(get_engine)):
+    """Get Analise repository."""
+    return AnaliseRepositorySQLAlchemy(engine)
+
+
 @router.get("/carga-oculta", response_model=list[CargaOcultaItem])
 def calcular_carga_oculta(
-    repo: AnaliseRepoDepends,
     subsistema: SubsistemaQuery = "SUDESTE",
     distribuidora: DistribuidoraQuery = None,
+    repo=Depends(get_repository),
 ):
     """
     Calcula carga oculta estimada (geração solar não medida).
@@ -35,7 +53,8 @@ def calcular_carga_oculta(
     - **distribuidora**: Filtrar por distribuidora (opcional)
     """
     try:
-        return repo.get_carga_oculta(subsistema, distribuidora)
+        use_case = ObtenerCargaOcultaUseCase(repository=repo)
+        return use_case.executar(subsistema, distribuidora)
     except Exception as exc:
         logger.error(f"Erro ao calcular carga oculta: {exc}", exc_info=True)
         raise DatabaseError("Falha ao calcular carga oculta") from exc
@@ -43,8 +62,8 @@ def calcular_carga_oculta(
 
 @router.get("/classes-consumo", response_model=list[ClasseConsumoItem])
 def get_classes_consumo(
-    repo: AnaliseRepoDepends,
     distribuidora: DistribuidoraQuery = None,
+    repo=Depends(get_repository),
 ):
     """
     Retorna consumo por classe de consumidor.
@@ -52,7 +71,8 @@ def get_classes_consumo(
     - **distribuidora**: Filtrar por distribuidora (opcional)
     """
     try:
-        return repo.get_classes_consumo(distribuidora)
+        use_case = ObtenerClassesConsumoUseCase(repository=repo)
+        return use_case.executar(distribuidora)
     except Exception as exc:
         logger.error(f"Erro ao buscar classes de consumo: {exc}", exc_info=True)
         raise DatabaseError("Falha ao buscar classes de consumo") from exc
@@ -60,8 +80,8 @@ def get_classes_consumo(
 
 @router.get("/alertas-fraude", response_model=AlertaFraude | dict)
 def get_alertas_fraude(
-    repo: AnaliseRepoDepends,
     distribuidora: DistribuidoraQuery = None,
+    repo=Depends(get_repository),
 ):
     """
     Retorna último alerta de fraude detectado.
@@ -69,7 +89,8 @@ def get_alertas_fraude(
     - **distribuidora**: Filtrar por distribuidora (opcional)
     """
     try:
-        return repo.get_alerta_fraude(distribuidora)
+        use_case = ObtenerAlertaFraudeUseCase(repository=repo)
+        return use_case.executar(distribuidora)
     except Exception as exc:
         logger.error(f"Erro ao buscar alertas de fraude: {exc}", exc_info=True)
         raise DatabaseError("Falha ao buscar alertas de fraude") from exc
@@ -77,8 +98,8 @@ def get_alertas_fraude(
 
 @router.get("/estabelecimentos/contagem", response_model=list[EstabelecimentoContagem])
 def get_contagem_estabelecimentos(
-    repo: AnaliseRepoDepends,
     distribuidora: DistribuidoraQuery = None,
+    repo=Depends(get_repository),
 ):
     """
     Retorna contagem de estabelecimentos por tipo.
@@ -86,7 +107,8 @@ def get_contagem_estabelecimentos(
     - **distribuidora**: Filtrar por distribuidora (opcional)
     """
     try:
-        return repo.get_contagem_estabelecimentos(distribuidora)
+        use_case = ObtenerContagemEstabelecimentosUseCase(repository=repo)
+        return use_case.executar(distribuidora)
     except Exception as exc:
         logger.error(f"Erro ao buscar contagem: {exc}", exc_info=True)
         raise DatabaseError("Falha ao buscar contagem de estabelecimentos") from exc
@@ -94,8 +116,8 @@ def get_contagem_estabelecimentos(
 
 @router.get("/estabelecimentos/resumo", response_model=ResumoGranular | dict)
 def get_resumo_estabelecimentos(
-    repo: AnaliseRepoDepends,
     distribuidora: DistribuidoraQuery = None,
+    repo=Depends(get_repository),
 ):
     """
     Retorna resumo geral dos dados granulares.
@@ -103,7 +125,8 @@ def get_resumo_estabelecimentos(
     - **distribuidora**: Filtrar por distribuidora (opcional)
     """
     try:
-        return repo.get_resumo_granular(distribuidora)
+        use_case = ObtenerResumoGranularUseCase(repository=repo)
+        return use_case.executar(distribuidora)
     except Exception as exc:
         logger.error(f"Erro ao buscar resumo: {exc}", exc_info=True)
         raise DatabaseError("Falha ao buscar resumo de estabelecimentos") from exc
@@ -112,6 +135,7 @@ def get_resumo_estabelecimentos(
 @router.get("/perfis-carga", response_model=PerfisResponse)
 def obter_perfis_carga(
     classes: str | None = None,
+    repo=Depends(get_repository),
 ):
     """
     Retorna perfis de carga típicos por classe de consumo.
@@ -134,16 +158,35 @@ def obter_perfis_carga(
     GET /analise/perfis-carga?classes=residencial,comercial
     ```
     """
-    from ..services.load_calc import get_load_profiles
-
     # Parse classes
     classes_list = None
     if classes:
         classes_list = [c.strip() for c in classes.split(",")]
 
     try:
-        resultado = get_load_profiles(classes_list)
-        return resultado
+        use_case = ObtenerPerfisCargaUseCase(repository=repo)
+        resultado = use_case.executar(classes_list)
+        
+        # Format response as list matching PerfisResponse schema
+        perfis_list = []
+        classes_disponiveis = []
+        
+        for perfil in resultado:
+            classes_disponiveis.append(perfil.classe)
+            perfis_list.append({
+                "classe": perfil.classe,
+                "curva": perfil.fatores_horarios,
+                "hora_pico": perfil.pico_hora,
+                "fator_pico": perfil.fator_pico,
+                "hora_vale": perfil.minima_hora,
+                "fator_vale": min(perfil.fatores_horarios) if perfil.fatores_horarios else 0.5,
+                "amplitude": (max(perfil.fatores_horarios) - min(perfil.fatores_horarios)) if perfil.fatores_horarios else 0.5,
+            })
+        
+        return {
+            "perfis": perfis_list,
+            "classes_disponiveis": classes_disponiveis
+        }
     except Exception as exc:
         logger.error(f"Erro ao buscar perfis de carga: {exc}", exc_info=True)
         raise DatabaseError("Falha ao buscar perfis de carga") from exc
@@ -154,6 +197,7 @@ def obter_estado_atual(
     subsistema: SubsistemaQuery = "SUDESTE",
     distribuidora: DistribuidoraQuery = None,
     subestacao_id: int | None = None,
+    repo=Depends(get_repository),
 ):
     """
     Retorna o estado atual do sistema (estimado em tempo real).
@@ -185,15 +229,22 @@ def obter_estado_atual(
     }
     ```
     """
-    from ..services.realtime_estimation import get_realtime_state
-
     try:
-        estado = get_realtime_state(
-            subsistema=subsistema,
-            distribuidora=distribuidora,
-            subestacao_id=subestacao_id
-        )
-        return estado
+        use_case = ObtenerEstadoAtualUseCase(repository=repo)
+        estado = use_case.executar(subsistema, distribuidora, subestacao_id)
+        
+        if estado:
+            return {
+                "timestamp": estado.timestamp.isoformat(),
+                "hora_atual": estado.hora_atual,
+                "estimativas": {
+                    "carga_ons_mw": estado.carga_ons_mw,
+                    "geracao_mmgd_mw": estado.geracao_mmgd_mw,
+                    "consumo_estimado_mw": estado.consumo_estimado_mw,
+                    "irradiancia_atual_wm2": estado.irradiancia_atual_wm2,
+                }
+            }
+        return {}
     except Exception as exc:
         logger.error(f"Erro ao calcular estado atual: {exc}", exc_info=True)
         raise DatabaseError("Falha ao calcular estado atual") from exc
@@ -201,10 +252,10 @@ def obter_estado_atual(
 
 @router.get("/alertas-historico")
 def obter_alertas_historico(
-    repo: AnaliseRepoDepends,
     distribuidora: str | None = None,
     dias: int = 30,
-    limite: int = 50
+    limite: int = 50,
+    repo=Depends(get_repository),
 ):
     """
     Retorna histórico de alertas de anomalias/fraudes.
@@ -236,23 +287,27 @@ def obter_alertas_historico(
     }
     ```
     """
-    from ..services.anomaly_detection import AnomalyDetector
-
     try:
-        detector = AnomalyDetector(repo.engine)
-
-        # Gerar alertas históricos sintéticos
-        alertas = detector.generate_historical_alerts(dias=dias, num_alertas=limite)
-
-        # Filtrar por distribuidora se especificado
-        if distribuidora:
-            alertas = [a for a in alertas if a.get("distribuidora", "").lower() == distribuidora.lower()]
+        use_case = ObtenerAlertasHistoricoUseCase(repository=repo)
+        alertas = use_case.executar(distribuidora, dias, limite)
 
         return {
             "total": len(alertas),
             "periodo_dias": dias,
             "distribuidora": distribuidora or "Todas",
-            "alertas": alertas[:limite]
+            "alertas": [
+                {
+                    "id": a.id,
+                    "data_deteccao": a.data_deteccao.isoformat(),
+                    "distribuidora": a.distribuidora,
+                    "tipo": a.tipo,
+                    "severidade": a.severidade,
+                    "descricao": a.descricao,
+                    "status": a.status,
+                    "impacto_kw": a.impacto_kw,
+                }
+                for a in alertas
+            ]
         }
 
     except Exception as exc:
@@ -262,9 +317,9 @@ def obter_alertas_historico(
 
 @router.post("/detectar-anomalias")
 def executar_deteccao_anomalias(
-    repo: AnaliseRepoDepends,
     distribuidora: str | None = None,
-    limite: int = 10
+    limite: int = 10,
+    repo=Depends(get_repository),
 ):
     """
     Executa detecção de anomalias em tempo real.
@@ -294,17 +349,25 @@ def executar_deteccao_anomalias(
     }
     ```
     """
-    from ..services.anomaly_detection import AnomalyDetector
-
     try:
-        detector = AnomalyDetector(repo.engine)
-        anomalias = detector.detect_anomalies(distribuidora=distribuidora, limite=limite)
+        use_case = DetectarAnomalasUseCase(repository=repo)
+        anomalias = use_case.executar(distribuidora, limite)
 
         return {
             "total_anomalias": len(anomalias),
             "distribuidora": distribuidora or "Todas",
             "timestamp": datetime.now().isoformat(),
-            "anomalias": anomalias
+            "anomalias": [
+                {
+                    "distribuidora": a.distribuidora,
+                    "tipo": a.tipo,
+                    "severidade": a.severidade,
+                    "desvio_percentual": a.desvio_percentual,
+                    "total_ucs_afetadas": a.total_ucs_afetadas,
+                    "impacto_kw": a.impacto_kw,
+                }
+                for a in anomalias
+            ]
         }
 
     except Exception as exc:

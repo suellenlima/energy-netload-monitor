@@ -1,15 +1,151 @@
-CREATE EXTENSION IF NOT EXISTS postgis;
+-- ============================================================================
+-- ENERGY NETLOAD MONITOR - SCHEMA UNIFICADO (APENAS TABELAS UTILIZADAS)
+-- ============================================================================
+-- Data: 2026-02-05
+-- Descrição: Schema unificado contendo TODAS as tabelas realmente utilizadas
+-- Consolidação: schema.sql + schema_aneel_bdgd.sql mesclados em um único arquivo
+-- Removidas: 30+ tabelas não referenciadas + 4 tabelas ANEEL não utilizadas
+-- ============================================================================
 
-CREATE TABLE IF NOT EXISTS usinas_siga (
-    ceg TEXT,
-    nome TEXT,
-    fonte TEXT,
-    combustivel TEXT,
-    potencia_kw DOUBLE PRECISION,
-    latitude DOUBLE PRECISION,
-    longitude DOUBLE PRECISION,
-    geom geometry(Point, 4326)
+-- ============================================================================
+-- EXTENSÕES
+-- ============================================================================
+
+CREATE EXTENSION IF NOT EXISTS postgis;
+CREATE EXTENSION IF NOT EXISTS postgis_raster;
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- ============================================================================
+-- TIPOS ENUM
+-- ============================================================================
+
+DO $$ BEGIN
+    CREATE TYPE tipo_estabelecimento AS ENUM (
+        'residencia',
+        'predio_residencial',
+        'comercio',
+        'predio_comercial',
+        'industria',
+        'outro'
+    );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE enum_tipo_tensao AS ENUM ('BT', 'MT', 'AT', 'DESCONHECIDO');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE enum_metodo_calculo AS ENUM ('convex_hull', 'buffer_500m', 'buffer_1km', 'buffer_2km', 'buffer_5km');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE enum_status_processamento AS ENUM ('em_processamento', 'concluido', 'erro', 'parcial');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- ============================================================================
+-- FUNÇÕES DE VALIDAÇÃO
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION fn_validar_coordenadas(lat DECIMAL, lon DECIMAL)
+RETURNS BOOLEAN AS $$
+BEGIN
+    IF lat IS NULL OR lon IS NULL THEN
+        RETURN TRUE;
+    END IF;
+    IF lat < -90 OR lat > 90 THEN
+        RAISE EXCEPTION 'Latitude fora de range: %', lat;
+    END IF;
+    IF lon < -180 OR lon > 180 THEN
+        RAISE EXCEPTION 'Longitude fora de range: %', lon;
+    END IF;
+    RETURN TRUE;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ============================================================================
+-- PARTE 1: DADOS ANEEL - TRANSFORMADORES E SUBESTAÇÕES
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS transformadores_aneel (
+    id INTEGER PRIMARY KEY,
+    codigo VARCHAR(100) UNIQUE NOT NULL,
+    nome VARCHAR(255),
+    subestacao_id INTEGER,
+    subestacao_codigo VARCHAR(100),
+    tensao_primaria_kv NUMERIC(10,2),
+    tensao_secundaria_v NUMERIC(10,2),
+    potencia_nominal_kva NUMERIC(10,2),
+    impedancia_percentual NUMERIC(10,2),
+    latitude DECIMAL(10, 7),
+    longitude DECIMAL(11, 7),
+    geom GEOMETRY(Point, 4326),
+    distribuidora VARCHAR(100),
+    dist_codigo VARCHAR(50),
+    status VARCHAR(50) DEFAULT 'ativo',
+    fonte_dados VARCHAR(50) DEFAULT 'ANEEL',
+    data_importacao TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    ativo BOOLEAN DEFAULT TRUE
 );
+
+CREATE TABLE IF NOT EXISTS subestacoes_aneel (
+    id INTEGER PRIMARY KEY,
+    codigo VARCHAR(100) UNIQUE,
+    nome VARCHAR(255) NOT NULL,
+    latitude DECIMAL(10, 7),
+    longitude DECIMAL(11, 7),
+    localizacao GEOMETRY(Point, 4326),
+    geom GEOMETRY(Point, 4326),
+    tensao_kv NUMERIC(10,2),
+    tensao_operacao_kv NUMERIC(10,2),
+    codigo_ons VARCHAR(50),
+    distribuidora VARCHAR(100),
+    dist_codigo VARCHAR(50),
+    ativo BOOLEAN DEFAULT TRUE,
+    data_criacao TIMESTAMP DEFAULT NOW(),
+    data_atualizacao TIMESTAMP DEFAULT NOW(),
+    fonte_dados VARCHAR(50) DEFAULT 'ANEEL'
+);
+
+CREATE TABLE IF NOT EXISTS aneel_bdgd_processamento (
+    id SERIAL PRIMARY KEY,
+    tipo_processamento VARCHAR(100) NOT NULL,
+    data_inicio TIMESTAMP DEFAULT NOW(),
+    data_fim TIMESTAMP,
+    status enum_status_processamento DEFAULT 'em_processamento',
+    transformadores_processados INTEGER DEFAULT 0,
+    subestacoes_processadas INTEGER DEFAULT 0,
+    consumidores_processados INTEGER DEFAULT 0,
+    erros_count INTEGER DEFAULT 0,
+    observacoes TEXT,
+    resultado_json JSONB DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS transformador_area_cobertura (
+    id SERIAL PRIMARY KEY,
+    transformador_id INTEGER UNIQUE NOT NULL REFERENCES transformadores_aneel(id),
+    area_cobertura GEOMETRY(Polygon, 4326),
+    metodo_definicao VARCHAR(100),
+    area_km2 NUMERIC(10,2),
+    raio_aproximado_m NUMERIC(10,2),
+    total_consumidores INTEGER,
+    data_atualizacao TIMESTAMP DEFAULT NOW(),
+    observacoes TEXT
+);
+
+-- ============================================================================
+-- PARTE 2: CARGAS REAIS (DADOS EM TEMPO REAL)
+-- ============================================================================
 
 CREATE TABLE IF NOT EXISTS carga_ons (
     time TIMESTAMPTZ NOT NULL,
@@ -17,178 +153,350 @@ CREATE TABLE IF NOT EXISTS carga_ons (
     carga_mw DOUBLE PRECISION
 );
 
-CREATE TABLE IF NOT EXISTS clima_real (
+CREATE TABLE IF NOT EXISTS irradiancia_solar (
     time TIMESTAMPTZ NOT NULL,
-    subsistema VARCHAR(20),
+    subsistema VARCHAR(50),
     irradiancia_wm2 DOUBLE PRECISION,
-    temperatura_c DOUBLE PRECISION,
-    CONSTRAINT clima_real_unique UNIQUE (time, subsistema)
+    temperatura_c DOUBLE PRECISION
 );
 
-CREATE TABLE IF NOT EXISTS gd_detalhada (
-    distribuidora TEXT,
-    classe TEXT,
-    sigla_uf TEXT,
-    fonte TEXT,
-    potencia_mw DOUBLE PRECISION
+CREATE TABLE IF NOT EXISTS geracao_mmgd (
+    time TIMESTAMPTZ NOT NULL,
+    subsistema VARCHAR(50),
+    geracao_mw DOUBLE PRECISION
 );
 
-CREATE TABLE IF NOT EXISTS auditoria_visual (
+CREATE TABLE IF NOT EXISTS consumidor (
+    id SERIAL PRIMARY KEY,
+    codigo_cliente VARCHAR(50) UNIQUE,
+    transformador_id INTEGER,
+    distribuidora VARCHAR(100),
+    classe_consumo VARCHAR(50),
+    consumo_kwh NUMERIC,
+    data_referencia DATE,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Hypertables para dados em série temporal
+SELECT create_hypertable('carga_ons', 'time', if_not_exists => TRUE);
+SELECT create_hypertable('irradiancia_solar', 'time', if_not_exists => TRUE);
+SELECT create_hypertable('geracao_mmgd', 'time', if_not_exists => TRUE);
+
+-- ============================================================================
+-- PARTE 3: REAL-TIME ESTIMATION
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS estado_sistema_realtime (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMPTZ NOT NULL,
+    subsistema VARCHAR(50),
+    carga_mw DOUBLE PRECISION,
+    geracao_mmgd_mw DOUBLE PRECISION,
+    irradiancia_wm2 DOUBLE PRECISION,
+    previsao_carga_mw DOUBLE PRECISION,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS previsoes_carga (
+    id SERIAL PRIMARY KEY,
+    subsistema VARCHAR(50),
+    hora_inicial TIMESTAMP,
+    hora_final TIMESTAMP,
+    carga_prevista_mw DOUBLE PRECISION,
+    confiabilidade NUMERIC,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- ============================================================================
+-- PARTE 4: LOAD CALCULATION
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS perfis_carga_classe (
+    id SERIAL PRIMARY KEY,
+    classe_consumo VARCHAR(50),
+    hora INTEGER,
+    percentual_carga NUMERIC,
+    tipo_dia VARCHAR(20),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS consumo_granular_classe (
+    id SERIAL PRIMARY KEY,
+    distribuidora VARCHAR(100),
+    classe_consumo VARCHAR(50),
+    consumo_kwh NUMERIC,
+    data_referencia DATE,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS mmgd_subsistema (
+    id SERIAL PRIMARY KEY,
+    subsistema VARCHAR(50),
+    geracao_mw NUMERIC,
+    data_referencia DATE,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS calibracao_parametros (
+    id SERIAL PRIMARY KEY,
+    parametro_nome VARCHAR(100),
+    valor_parametro NUMERIC,
+    subsistema VARCHAR(50),
+    data_criacao TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS cargas_calculadas (
+    id SERIAL PRIMARY KEY,
+    subsistema VARCHAR(50),
+    distribuidora VARCHAR(100),
+    carga_calculada_mw NUMERIC,
+    timestamp_calculo TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- ============================================================================
+-- PARTE 5: TELHADOS E PAINÉIS SOLARES
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS telhados_detectados_transformador (
+    id SERIAL PRIMARY KEY,
+    transformador_id INTEGER NOT NULL REFERENCES transformadores_aneel(id),
+    subestacao_id INTEGER NOT NULL REFERENCES subestacoes_aneel(id),
+    latitude DOUBLE PRECISION NOT NULL,
+    longitude DOUBLE PRECISION NOT NULL,
+    area_m2 DOUBLE PRECISION NOT NULL,
+    confianca DOUBLE PRECISION NOT NULL CHECK (confianca >= 0 AND confianca <= 1),
+    bbox_json JSONB,
+    fonte_imagem VARCHAR(50) DEFAULT 'google_maps',
+    resolucao_cm DOUBLE PRECISION DEFAULT 30.0,
+    timestamp_deteccao TIMESTAMP NOT NULL DEFAULT NOW(),
+    timestamp_criacao TIMESTAMP NOT NULL DEFAULT NOW(),
+    timestamp_atualizacao TIMESTAMP NOT NULL DEFAULT NOW(),
+    url_imagem_origem TEXT,
+    codigo VARCHAR(100)
+);
+
+CREATE TABLE IF NOT EXISTS paineis_solares_detectados (
+    id SERIAL PRIMARY KEY,
+    telhado_id INTEGER NOT NULL REFERENCES telhados_detectados_transformador(id),
+    transformador_id INTEGER NOT NULL REFERENCES transformadores_aneel(id),
+    subestacao_id INTEGER NOT NULL REFERENCES subestacoes_aneel(id),
+    bbox_json JSONB NOT NULL,
+    centroide_json JSONB NOT NULL,
+    area_pixeis INTEGER NOT NULL,
+    area_m2 DOUBLE PRECISION NOT NULL,
+    confianca DOUBLE PRECISION NOT NULL CHECK (confianca >= 0 AND confianca <= 1),
+    tipo_painel VARCHAR(50) DEFAULT 'desconhecido',
+    potencia_w DOUBLE PRECISION,
+    timestamp_deteccao TIMESTAMP NOT NULL DEFAULT NOW(),
+    timestamp_criacao TIMESTAMP NOT NULL DEFAULT NOW(),
+    timestamp_atualizacao TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS potencia_telhados (
+    id SERIAL PRIMARY KEY,
+    telhado_id INTEGER NOT NULL UNIQUE REFERENCES telhados_detectados_transformador(id),
+    transformador_id INTEGER NOT NULL REFERENCES transformadores_aneel(id),
+    num_paineis INTEGER DEFAULT 0,
+    area_total_m2 DOUBLE PRECISION DEFAULT 0,
+    potencia_instalada_kw DOUBLE PRECISION DEFAULT 0,
+    producao_diaria_kwh DOUBLE PRECISION DEFAULT 0,
+    producao_anual_kwh DOUBLE PRECISION DEFAULT 0,
+    economia_anual_brl DOUBLE PRECISION DEFAULT 0,
+    potencia_por_m2 DOUBLE PRECISION DEFAULT 150.0,
+    fator_capacidade DOUBLE PRECISION DEFAULT 0.15,
+    insolacao_media_kwh_m2_dia DOUBLE PRECISION DEFAULT 4.5,
+    tarifa_brl_kwh DOUBLE PRECISION DEFAULT 0.80,
+    timestamp_calculo TIMESTAMP NOT NULL DEFAULT NOW(),
+    timestamp_atualizacao TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================================
+-- PARTE 6: SATÉLITE (APENAS CBERS4A UTILIZADO)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS requisicoes_satelite_cbers4a (
     id BIGSERIAL PRIMARY KEY,
-    data_inspecao TIMESTAMPTZ,
-    latitude DOUBLE PRECISION,
-    longitude DOUBLE PRECISION,
-    distribuidora TEXT,
-    classe_estimada_ia TEXT,
-    diferenca_fraude_kw DOUBLE PRECISION,
-    potencia_oficial_kw DOUBLE PRECISION,
-    status TEXT
+    subestacao_id INTEGER REFERENCES subestacoes_aneel(id) ON DELETE CASCADE,
+    transformador_id INTEGER REFERENCES transformadores_aneel(id) ON DELETE CASCADE,
+    data_requisicao TIMESTAMPTZ DEFAULT NOW(),
+    tipo_requisicao VARCHAR(50) NOT NULL,
+    status VARCHAR(20) DEFAULT 'sucesso',
+    data_imagem TIMESTAMPTZ,
+    cobertura_nuvem_percentual DOUBLE PRECISION,
+    resolucao_metros DOUBLE PRECISION DEFAULT 2.0,
+    bbox_min_lat DOUBLE PRECISION,
+    bbox_min_lon DOUBLE PRECISION,
+    bbox_max_lat DOUBLE PRECISION,
+    bbox_max_lon DOUBLE PRECISION,
+    imagem_id VARCHAR(255),
+    url_download TEXT,
+    tamanho_mb DOUBLE PRECISION,
+    observacoes TEXT,
+    fonte_satelite VARCHAR(50),
+    custo_usd_estimado DOUBLE PRECISION,
+    tempo_requisicao_ms INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS subestacoes_ons (
-    id SERIAL PRIMARY KEY,
-    nome TEXT UNIQUE,
-    sigla_se TEXT,
-    tensao_kv DOUBLE PRECISION,
-    subsistema TEXT,
-    distribuidora TEXT,
-    latitude DOUBLE PRECISION,
-    longitude DOUBLE PRECISION,
-    fonte_dados TEXT,
-    geom geometry(Point, 4326)
-);
+-- ============================================================================
+-- ÍNDICES - ANEEL
+-- ============================================================================
 
-CREATE TABLE IF NOT EXISTS subestacoes_detectadas (
-    id SERIAL PRIMARY KEY,
-    cluster_id INTEGER,
-    nome TEXT,
-    latitude DOUBLE PRECISION,
-    longitude DOUBLE PRECISION,
-    distribuidora TEXT,
-    subsistema TEXT,
-    quantidade_gd INTEGER,
-    potencia_total_mw DOUBLE PRECISION,
-    raio_deteccao_km DOUBLE PRECISION,
-    data_deteccao TIMESTAMPTZ DEFAULT NOW(),
-    geom geometry(Point, 4326)
-);
+CREATE INDEX IF NOT EXISTS idx_transformadores_aneel_geom ON transformadores_aneel USING GIST(geom);
+CREATE INDEX IF NOT EXISTS idx_transformadores_aneel_distribuidora ON transformadores_aneel(distribuidora);
+CREATE INDEX IF NOT EXISTS idx_transformadores_aneel_status ON transformadores_aneel(status);
+CREATE INDEX IF NOT EXISTS idx_transformadores_aneel_distribuida_status ON transformadores_aneel(distribuidora, status);
+CREATE INDEX IF NOT EXISTS idx_subestacoes_aneel_geom ON subestacoes_aneel USING GIST(geom);
+CREATE INDEX IF NOT EXISTS idx_subestacoes_aneel_codigo ON subestacoes_aneel(codigo);
+CREATE INDEX IF NOT EXISTS idx_subestacoes_aneel_distribuidora ON subestacoes_aneel(distribuidora);
+CREATE INDEX IF NOT EXISTS idx_subestacoes_aneel_tensao ON subestacoes_aneel(tensao_kv);
+CREATE INDEX IF NOT EXISTS idx_subestacoes_aneel_localizacao ON subestacoes_aneel(localizacao) WHERE localizacao IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_transformador_area_geom ON transformador_area_cobertura USING GIST(area_cobertura);
+CREATE INDEX IF NOT EXISTS idx_transformador_area_id ON transformador_area_cobertura(transformador_id);
+
+-- ============================================================================
+-- ÍNDICES - CARGAS EM TEMPO REAL
+-- ============================================================================
 
 CREATE INDEX IF NOT EXISTS idx_carga_ons_time ON carga_ons (time);
 CREATE INDEX IF NOT EXISTS idx_carga_ons_subsistema ON carga_ons (subsistema);
-CREATE INDEX IF NOT EXISTS idx_gd_detalhada_distribuidora ON gd_detalhada (distribuidora);
-CREATE INDEX IF NOT EXISTS idx_auditoria_visual_distribuidora ON auditoria_visual (distribuidora);
-CREATE INDEX IF NOT EXISTS idx_subestacoes_ons_distribuidora ON subestacoes_ons (distribuidora);
-CREATE INDEX IF NOT EXISTS idx_subestacoes_ons_subsistema ON subestacoes_ons (subsistema);
-CREATE INDEX IF NOT EXISTS idx_subestacoes_detectadas_distribuidora ON subestacoes_detectadas (distribuidora);
-CREATE INDEX IF NOT EXISTS idx_subestacoes_detectadas_cluster ON subestacoes_detectadas (cluster_id);
+CREATE INDEX IF NOT EXISTS idx_carga_ons_subsistema_time ON carga_ons (subsistema, time DESC);
+CREATE INDEX IF NOT EXISTS idx_irradiancia_solar_subsistema_time ON irradiancia_solar (subsistema, time);
+CREATE INDEX IF NOT EXISTS idx_geracao_mmgd_subsistema_time ON geracao_mmgd (subsistema, time DESC);
 
-SELECT create_hypertable('carga_ons', 'time', if_not_exists => TRUE);
-SELECT create_hypertable('clima_real', 'time', if_not_exists => TRUE);
+-- ============================================================================
+-- ÍNDICES - REAL-TIME ESTIMATION
+-- ============================================================================
 
--- ENUM para tipos de estabelecimento
-CREATE TYPE tipo_estabelecimento AS ENUM (
-    'residencia',
-    'predio_residencial',
-    'comercio',
-    'predio_comercial',
-    'industria',
-    'outro'
-);
+CREATE INDEX IF NOT EXISTS idx_estado_sistema_time ON estado_sistema_realtime(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_estado_sistema_subsistema ON estado_sistema_realtime(subsistema);
+CREATE INDEX IF NOT EXISTS idx_previsoes_carga_subsistema ON previsoes_carga(subsistema);
+CREATE INDEX IF NOT EXISTS idx_previsoes_carga_hora ON previsoes_carga(hora_inicial);
 
--- Tabela granular com dados detalhados para contabilização de unidades
-CREATE TABLE IF NOT EXISTS gd_granular (
-    id BIGSERIAL PRIMARY KEY,
-    distribuidora TEXT NOT NULL,
-    classe_consumo TEXT NOT NULL,
-    tipo_consumidor TEXT,
-    subgrupo_tarifario TEXT,
-    qtd_unidades INTEGER NOT NULL DEFAULT 1,
-    sigla_uf TEXT NOT NULL,
-    fonte_geracao TEXT NOT NULL,
-    potencia_kw DOUBLE PRECISION NOT NULL,
-    tipo_estabelecimento tipo_estabelecimento NOT NULL,
-    data_carga TIMESTAMPTZ DEFAULT NOW()
-);
+-- ============================================================================
+-- ÍNDICES - LOAD CALCULATION
+-- ============================================================================
 
--- Índices para performance
-CREATE INDEX IF NOT EXISTS idx_gd_granular_distribuidora ON gd_granular (distribuidora);
-CREATE INDEX IF NOT EXISTS idx_gd_granular_tipo_estab ON gd_granular (tipo_estabelecimento);
-CREATE INDEX IF NOT EXISTS idx_gd_granular_composite ON gd_granular (distribuidora, tipo_estabelecimento);
-CREATE INDEX IF NOT EXISTS idx_gd_granular_uf ON gd_granular (sigla_uf);
+CREATE INDEX IF NOT EXISTS idx_perfis_carga_classe ON perfis_carga_classe(classe_consumo, hora);
+CREATE INDEX IF NOT EXISTS idx_consumo_granular_dist ON consumo_granular_classe(distribuidora);
+CREATE INDEX IF NOT EXISTS idx_mmgd_subsistema ON mmgd_subsistema(subsistema);
+CREATE INDEX IF NOT EXISTS idx_cargas_calculadas_timestamp ON cargas_calculadas(timestamp_calculo DESC);
 
--- Tabela BDGD: Base de Dados Geográfica da Distribuidora
--- Fonte: ANEEL - https://dadosabertos.aneel.gov.br/dataset/bdgd
-CREATE TABLE IF NOT EXISTS bdgd_unidades_consumidoras (
-    id BIGSERIAL PRIMARY KEY,
-    cod_id VARCHAR(50),
-    distribuidora VARCHAR(100) NOT NULL,
-    classe_consumo VARCHAR(50) NOT NULL,  -- Residencial, Comercial, Industrial, Rural, Poder Público
-    subclasse VARCHAR(50),                 -- Baixa Renda, Normal, etc.
-    energia_kwh_mes NUMERIC,               -- Consumo mensal médio em kWh
-    tensao_fornecimento VARCHAR(20),       -- AT, MT, BT
-    municipio VARCHAR(100),
-    bairro VARCHAR(100),
-    geom GEOMETRY(Point, 4326),            -- Coordenadas geográficas
-    data_referencia DATE,                  -- Mês/ano de referência dos dados
-    created_at TIMESTAMPTZ DEFAULT NOW(),
+-- ============================================================================
+-- ÍNDICES - TELHADOS E PAINÉIS
+-- ============================================================================
 
-    CONSTRAINT bdgd_uc_energia_check CHECK (energia_kwh_mes >= 0)
-);
+CREATE INDEX IF NOT EXISTS idx_telhados_trafo_transformador ON telhados_detectados_transformador(transformador_id);
+CREATE INDEX IF NOT EXISTS idx_telhados_trafo_subestacao ON telhados_detectados_transformador(subestacao_id);
+CREATE INDEX IF NOT EXISTS idx_telhados_trafo_timestamp ON telhados_detectados_transformador(timestamp_deteccao DESC);
+CREATE INDEX IF NOT EXISTS idx_telhados_trafo_confianca ON telhados_detectados_transformador(confianca DESC);
+CREATE INDEX IF NOT EXISTS idx_paineis_telhado ON paineis_solares_detectados(telhado_id);
+CREATE INDEX IF NOT EXISTS idx_paineis_transformador ON paineis_solares_detectados(transformador_id);
+CREATE INDEX IF NOT EXISTS idx_paineis_subestacao ON paineis_solares_detectados(subestacao_id);
+CREATE INDEX IF NOT EXISTS idx_paineis_timestamp ON paineis_solares_detectados(timestamp_deteccao DESC);
+CREATE INDEX IF NOT EXISTS idx_paineis_confianca ON paineis_solares_detectados(confianca DESC);
+CREATE INDEX IF NOT EXISTS idx_potencia_transformador ON potencia_telhados(transformador_id);
+CREATE INDEX IF NOT EXISTS idx_potencia_timestamp ON potencia_telhados(timestamp_atualizacao DESC);
 
--- Índices para performance na BDGD
-CREATE INDEX IF NOT EXISTS idx_bdgd_uc_classe ON bdgd_unidades_consumidoras(classe_consumo);
-CREATE INDEX IF NOT EXISTS idx_bdgd_uc_geom ON bdgd_unidades_consumidoras USING GIST(geom);
-CREATE INDEX IF NOT EXISTS idx_bdgd_uc_distribuidora ON bdgd_unidades_consumidoras(distribuidora);
-CREATE INDEX IF NOT EXISTS idx_bdgd_uc_municipio ON bdgd_unidades_consumidoras(municipio);
-CREATE INDEX IF NOT EXISTS idx_bdgd_uc_composite ON bdgd_unidades_consumidoras(distribuidora, classe_consumo);
-CREATE INDEX IF NOT EXISTS idx_bdgd_uc_data_ref ON bdgd_unidades_consumidoras(data_referencia);
+-- ============================================================================
+-- ÍNDICES - SATÉLITE
+-- ============================================================================
 
--- Comentários explicativos para tabela BDGD
-COMMENT ON TABLE bdgd_unidades_consumidoras IS 'Unidades Consumidoras da Base de Dados Geográfica da Distribuidora (BDGD) - ANEEL';
-COMMENT ON COLUMN bdgd_unidades_consumidoras.energia_kwh_mes IS 'Consumo médio mensal em kWh (dados mensais agregados)';
-COMMENT ON COLUMN bdgd_unidades_consumidoras.classe_consumo IS 'Classe de consumo segundo ANEEL (Residencial, Comercial, Industrial, Rural, Poder Público)';
-COMMENT ON COLUMN bdgd_unidades_consumidoras.geom IS 'Localização geográfica da UC para associação espacial com subestações';
+CREATE INDEX IF NOT EXISTS idx_requisicoes_cbers_subestacao ON requisicoes_satelite_cbers4a(subestacao_id);
+CREATE INDEX IF NOT EXISTS idx_requisicoes_cbers_data ON requisicoes_satelite_cbers4a(data_requisicao);
+CREATE INDEX IF NOT EXISTS idx_requisicoes_cbers_status ON requisicoes_satelite_cbers4a(status);
+CREATE INDEX IF NOT EXISTS idx_requisicoes_cbers4a_transformador_id ON requisicoes_satelite_cbers4a(transformador_id);
 
--- Comentários explicativos para tabela usinas_siga
-COMMENT ON TABLE usinas_siga IS 'Usinas geradoras cadastradas no SIGA/ANEEL';
-COMMENT ON COLUMN usinas_siga.potencia_kw IS 'Potência instalada da usina (kW)';
-COMMENT ON COLUMN usinas_siga.geom IS 'Localização geográfica da usina';
+-- ============================================================================
+-- TRIGGERS PARA ATUALIZAÇÃO AUTOMÁTICA DE GEOMETRIA
+-- ============================================================================
 
--- Comentários explicativos para tabela carga_ons
-COMMENT ON TABLE carga_ons IS 'Histórico de carga líquida medida pelo ONS (Operador Nacional do Sistema)';
-COMMENT ON COLUMN carga_ons.carga_mw IS 'Carga líquida medida pelo ONS nos pontos de entrega (MW) - potência média horária';
-COMMENT ON COLUMN carga_ons.subsistema IS 'Subsistema elétrico (SUDESTE, SUL, NORDESTE, NORTE)';
+CREATE OR REPLACE FUNCTION aneel_atualizar_geometria_transformadores()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.latitude IS NOT NULL AND NEW.longitude IS NOT NULL THEN
+        NEW.geom := ST_SetSRID(ST_MakePoint(NEW.longitude, NEW.latitude), 4326);
+    END IF;
+    NEW.updated_at := NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
--- Comentários explicativos para tabela clima_real
-COMMENT ON TABLE clima_real IS 'Dados climáticos reais para estimativa de geração solar';
-COMMENT ON COLUMN clima_real.irradiancia_wm2 IS 'Irradiância solar medida (W/m²) - usado para calcular geração fotovoltaica';
-COMMENT ON COLUMN clima_real.temperatura_c IS 'Temperatura ambiente (°C) - afeta eficiência dos painéis solares';
+CREATE TRIGGER trg_aneel_transformadores_geometria
+    BEFORE INSERT OR UPDATE ON transformadores_aneel
+    FOR EACH ROW
+    EXECUTE FUNCTION aneel_atualizar_geometria_transformadores();
 
--- Comentários explicativos para tabela gd_detalhada
-COMMENT ON TABLE gd_detalhada IS 'Geração distribuída (micro e minigeração) agregada por distribuidora e classe';
-COMMENT ON COLUMN gd_detalhada.potencia_mw IS 'Potência instalada de geração distribuída (MW)';
-COMMENT ON COLUMN gd_detalhada.classe IS 'Classe de consumidor (Residencial, Comercial, Industrial, Rural)';
+CREATE OR REPLACE FUNCTION aneel_atualizar_geometria_subestacoes()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.latitude IS NOT NULL AND NEW.longitude IS NOT NULL THEN
+        NEW.localizacao := ST_SetSRID(ST_MakePoint(NEW.longitude, NEW.latitude), 4326);
+    END IF;
+    NEW.data_atualizacao := NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
--- Comentários explicativos para tabela auditoria_visual
-COMMENT ON TABLE auditoria_visual IS 'Resultados de auditoria visual com IA para detecção de fraudes';
-COMMENT ON COLUMN auditoria_visual.diferenca_fraude_kw IS 'Diferença de potência entre estimativa IA e valor oficial (kW) - indica possível fraude';
-COMMENT ON COLUMN auditoria_visual.potencia_oficial_kw IS 'Potência oficialmente registrada pela distribuidora (kW)';
+CREATE TRIGGER trg_aneel_subestacoes_geometria
+    BEFORE INSERT OR UPDATE ON subestacoes_aneel
+    FOR EACH ROW
+    EXECUTE FUNCTION aneel_atualizar_geometria_subestacoes();
 
--- Comentários explicativos para tabela subestacoes_ons
-COMMENT ON TABLE subestacoes_ons IS 'Subestações oficiais do sistema elétrico nacional (fonte: ONS)';
-COMMENT ON COLUMN subestacoes_ons.tensao_kv IS 'Tensão nominal da subestação (kV) - AT: 230/500/765, MT: 69/138';
-COMMENT ON COLUMN subestacoes_ons.geom IS 'Localização geográfica da subestação';
+-- ============================================================================
+-- VIEWS
+-- ============================================================================
 
--- Comentários explicativos para tabela subestacoes_detectadas
-COMMENT ON TABLE subestacoes_detectadas IS 'Subestações detectadas por clustering geoespacial de GDs';
-COMMENT ON COLUMN subestacoes_detectadas.potencia_total_mw IS 'Potência total agregada das GDs próximas (MW) - soma das instalações no cluster';
-COMMENT ON COLUMN subestacoes_detectadas.raio_deteccao_km IS 'Raio de detecção usado no clustering geoespacial (km) - geralmente 5-15 km';
-COMMENT ON COLUMN subestacoes_detectadas.quantidade_gd IS 'Quantidade de instalações de geração distribuída no cluster';
-COMMENT ON COLUMN subestacoes_detectadas.geom IS 'Centroide do cluster (coordenadas médias das GDs agrupadas)';
+CREATE OR REPLACE VIEW v_aneel_subestacoes_com_transformadores AS
+SELECT 
+    s.id,
+    s.codigo,
+    s.nome,
+    s.distribuidora,
+    s.tensao_kv,
+    s.latitude,
+    s.longitude,
+    COUNT(t.id) as quantidade_transformadores,
+    ROUND(SUM(CAST(t.potencia_nominal_kva AS DECIMAL))::NUMERIC, 2) as potencia_total_kva
+FROM subestacoes_aneel s
+LEFT JOIN transformadores_aneel t ON t.subestacao_codigo = s.codigo AND s.distribuidora = t.distribuidora
+WHERE s.ativo = TRUE
+GROUP BY s.id, s.codigo, s.nome, s.distribuidora, s.tensao_kv, s.latitude, s.longitude
+ORDER BY s.distribuidora, quantidade_transformadores DESC;
 
--- Comentários explicativos para tabela gd_granular
-COMMENT ON TABLE gd_granular IS 'Dados granulares de geração distribuída (nível de instalação individual)';
-COMMENT ON COLUMN gd_granular.potencia_kw IS 'Potência instalada da geração distribuída (kW)';
-COMMENT ON COLUMN gd_granular.qtd_unidades IS 'Número de unidades consumidoras atendidas por esta instalação de GD';
-COMMENT ON COLUMN gd_granular.tipo_estabelecimento IS 'Tipo do estabelecimento (residência, comércio, indústria, etc.)';
-COMMENT ON COLUMN gd_granular.classe_consumo IS 'Classe de consumo ANEEL (Residencial, Comercial, Industrial, Rural, Poder Público)';
+-- ============================================================================
+-- ESTATÍSTICAS E ANÁLISE
+-- ============================================================================
+
+ANALYZE transformadores_aneel;
+ANALYZE subestacoes_aneel;
+ANALYZE carga_ons;
+ANALYZE irradiancia_solar;
+ANALYZE geracao_mmgd;
+ANALYZE estado_sistema_realtime;
+ANALYZE telhados_detectados_transformador;
+ANALYZE paineis_solares_detectados;
+ANALYZE potencia_telhados;
+ANALYZE requisicoes_satelite_cbers4a;
+
+-- ============================================================================
+-- RESUMO FINAL
+-- ============================================================================
+
+-- Verificação de criação bem-sucedida
+SELECT 
+    'Schema Unificado criado com sucesso!' as status,
+    NOW() as data_execucao;
+
+-- Contagem de tabelas criadas
+SELECT 
+    'Total de tabelas criadas:' as info,
+    COUNT(*) as total
+FROM information_schema.tables 
+WHERE table_schema = 'public'
+  AND table_type = 'BASE TABLE';
+
+-- ============================================================================
+-- FIM DO SCHEMA UNIFICADO
+-- ============================================================================

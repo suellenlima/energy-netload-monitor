@@ -1,0 +1,7 @@
+names:
+  0: roof
+nc: 1
+path: /home/jovyan/work/roof_dataset_yolo
+test: images/test
+train: images/train
+val: images/val
