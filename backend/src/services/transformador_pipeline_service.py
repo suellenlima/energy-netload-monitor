@@ -46,7 +46,7 @@ from PIL import Image
 
 from ..infrastructure.persistence.transformador_pipeline import TransformadorPipelineRepository
 from ..application.telhado_detection.service import TelhadoDetectionService
-from .solar_panel_service import SolarPanelService
+from ..application.painel_solar import PainelSolarApplicationService
 from ..schemas.painel_solar import (
     PainelSolarResponse,
     EstimativaPotenciaResponse,
@@ -73,7 +73,7 @@ class TransformadorPipelineService:
         
         # Serviços de detecção (lazy loading)
         self._servico_telhados: Optional[TelhadoDetectionService] = None
-        self._servico_paineis: Optional[PainelSolarDetectionService] = None
+        self._servico_paineis: Optional[PainelSolarApplicationService] = None
         
         # Criar diretório de cache
         self.cache_dir = self._criar_dir_cache()
@@ -89,11 +89,11 @@ class TransformadorPipelineService:
             self._servico_telhados = TelhadoDetectionService(engine=self.engine)
         return self._servico_telhados
 
-    def _obter_servico_paineis(self) -> SolarPanelService:
-        """Obtém ou cria instância do serviço de painéis solares."""
+    def _obter_servico_paineis(self) -> PainelSolarApplicationService:
+        """Obtém ou cria instância do serviço DDD de painéis solares."""
         if self._servico_paineis is None:
-            self.logger.info("🔧 Inicializando serviço de detecção de painéis solares...")
-            self._servico_paineis = SolarPanelService()
+            self.logger.info("🔧 Inicializando serviço DDD de detecção de painéis solares...")
+            self._servico_paineis = PainelSolarApplicationService()
         return self._servico_paineis
 
     # ========================================================================
@@ -183,42 +183,47 @@ class TransformadorPipelineService:
         try:
             servico_paineis = self._obter_servico_paineis()
             
-            # Processar telhado para painéis
-            resultado_paineis = servico_paineis.processar_telhado(
+            # Processar telhado para painéis (DDD)
+            resultado_paineis = servico_paineis.processar_telhado_completo(
                 url_imagem=caminho_imagem,
                 bbox=bbox,
                 confianca_minima=confianca_minima,
                 potencia_por_m2=potencia_por_m2
             )
             
-            if not resultado_paineis['sucesso'] or not resultado_paineis['paineis']:
+            if not resultado_paineis.sucesso or not resultado_paineis.paineis:
                 return {'sucesso': False, 'num_paineis': 0}
             
-            # Formatar painéis para resposta
+            # Formatar painéis para resposta (converter DTOs para schemas)
             paineis_response = [
                 PainelSolarResponse(
-                    id_painel=p['id_painel'],
-                    bbox=p['bbox'],
-                    centroide=p['centroide'],
-                    area_pixeis=p['area_pixeis'],
-                    area_m2=p['area_m2'],
-                    confianca=p['confianca'],
-                    tipo_painel=p['tipo_painel'],
-                    timestamp_deteccao=datetime.fromisoformat(p['timestamp_deteccao'])
+                    id_painel=p.id_painel,
+                    bbox=p.bbox,
+                    centroide=p.centroide,
+                    area_pixeis=p.area_pixeis,
+                    area_m2=p.area_m2,
+                    confianca=p.confianca,
+                    tipo_painel=p.tipo_painel,
+                    timestamp_deteccao=p.timestamp_deteccao
                 )
-                for p in resultado_paineis['paineis']
+                for p in resultado_paineis.paineis
             ]
             
             potencia_response = EstimativaPotenciaResponse(
-                **resultado_paineis['potencia']
-            ) if resultado_paineis['potencia'] else None
+                total_area_m2=resultado_paineis.estimativa_potencia.total_area_m2,
+                num_paineis=resultado_paineis.estimativa_potencia.num_paineis,
+                potencia_instalada_kw=resultado_paineis.estimativa_potencia.potencia_instalada_kw,
+                producao_diaria_kwh=resultado_paineis.estimativa_potencia.producao_diaria_kwh,
+                producao_anual_kwh=resultado_paineis.estimativa_potencia.producao_anual_kwh,
+                economia_anual_brl=resultado_paineis.estimativa_potencia.economia_anual_brl
+            ) if resultado_paineis.estimativa_potencia else None
             
             return {
                 'sucesso': True,
                 'num_paineis': len(paineis_response),
                 'paineis': paineis_response,
                 'potencia': potencia_response,
-                'potencia_dict': resultado_paineis['potencia']
+                'potencia_dict': resultado_paineis.estimativa_potencia.to_dict() if resultado_paineis.estimativa_potencia else None
             }
         
         except Exception as e:
