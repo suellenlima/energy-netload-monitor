@@ -8,7 +8,7 @@ router = APIRouter()
 
 @router.get("/")
 def read_root():
-    return {"message": "Energy Monitor Online ⚡"}
+    return {"message": "EFICIENERGY Online ⚡"}
 
 
 @router.get("/health")
