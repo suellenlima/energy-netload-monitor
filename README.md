@@ -74,15 +74,17 @@ docker-compose exec db psql -U admin -d energy_monitor -c "SELECT table_name FRO
 
 Executar extracoes:
 ```powershell
-# ✅ Dados ANEEL SIGA (Geração Distribuída) - FUNCIONANDO
-docker-compose exec etl python src/extractors/aneel_client.py
+# ✅ Dados ANEEL USINAS SIGA (Geração Distribuída)
+docker-compose exec etl python src/extractors/aneel_usinas_siga_client.py
 
 # ✅ Dados ONS
-docker-compose exec etl python src/extractors/ons_client.py
-docker-compose exec etl python src/extractors/subestacoes_client.py
+docker-compose exec etl python src/extractors/ons_subsistema_client.py
+
+# OBSOLETE - USAR DADOS ANEEL 
+docker-compose exec etl python src/extractors/ons_subestacoes_client.py
 
 # Dados adicionais
-docker-compose exec etl python src/extractors/gd_client.py
+docker-compose exec etl python src/extractors/aneel_gd_mmgd_client.py
 docker-compose exec etl python src/extractors/inpe_weather_client.py
 docker-compose exec etl python src/fix_data.py
 
@@ -103,7 +105,7 @@ docker compose exec -T db psql -U admin -d energy_monitor -c "CREATE EXTENSION I
 ## Executar ETL
 ```powershell
 
-docker exec energy_db psql -U admin -d energy_monitor -c "\dt" 2>&1
+# docker exec energy_db psql -U admin -d energy_monitor -c "\dt" 2>&1
 
 # Extração e carga de dados ANEEL BDGD
 docker compose exec -T etl python /app/src/extractors/aneel_bdgd_local/etl_aneel_bdgd_local.py

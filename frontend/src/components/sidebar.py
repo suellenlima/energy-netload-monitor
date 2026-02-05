@@ -25,6 +25,17 @@ def _load_distribuidoras(client: ApiClient, subsistema: str | None = None) -> Li
     return [""]
 
 
+def _load_subsistemas(client: ApiClient) -> List[str]:
+    """Carrega lista de subsistemas da API."""
+    result = client.get("/auxiliar/subsistemas")
+    if result.error:
+        show_error(result.error, location="sidebar")
+        return ["SUDESTE", "SUL", "NORDESTE", "NORTE"]  # fallback
+    if isinstance(result.data, list):
+        return result.data
+    return ["SUDESTE", "SUL", "NORDESTE", "NORTE"]  # fallback
+
+
 def render_sidebar(client: ApiClient) -> SidebarState:
     """
     Renderiza sidebar com controles de filtros.
@@ -48,10 +59,12 @@ def render_sidebar(client: ApiClient) -> SidebarState:
         st.session_state.multiplicador = 1
 
     # Controles de filtros (não causam recarregamento automático)
+    opcoes_subsistemas = _load_subsistemas(client)
+    
     subsistema = st.sidebar.selectbox(
         "Subsistema (ONS)",
-        ["SUDESTE", "SUL", "NORDESTE", "NORTE"],
-        index=["SUDESTE", "SUL", "NORDESTE", "NORTE"].index(st.session_state.subsistema),
+        opcoes_subsistemas,
+        index=opcoes_subsistemas.index(st.session_state.subsistema) if st.session_state.subsistema in opcoes_subsistemas else 0,
         key="subsistema_select"
     )
 

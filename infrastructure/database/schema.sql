@@ -481,6 +481,156 @@ ANALYZE potencia_telhados;
 ANALYZE requisicoes_satelite_cbers4a;
 
 -- ============================================================================
+-- ONS SUBSISTEMA - SCHEMA NORMALIZADO (3NF)
+-- ============================================================================
+-- Modelo normalizado para evitar duplicação de dados:
+-- - subsistema_ons: Fatos (time series) - time, subsistema, carga_mw
+-- - subsistema_ons_regiao: Dimensão - subsistema, regiao, codigo, nome_completo
+-- Relacionamento 1:N através de FK
+
+-- 1. Tabela de Dimensão de Subsistemas e Regiões
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS subsistema_ons_regiao (
+    subsistema TEXT PRIMARY KEY,
+    subsistema_codigo VARCHAR(10) UNIQUE NOT NULL,
+    regiao TEXT NOT NULL,
+    nome_completo TEXT NOT NULL,
+    descricao TEXT,
+    ativo BOOLEAN DEFAULT TRUE,
+    data_criacao TIMESTAMP DEFAULT NOW(),
+    data_atualizacao TIMESTAMP DEFAULT NOW()
+);
+
+COMMENT ON TABLE subsistema_ons_regiao IS 'Dimensão de subsistemas ONS com informações geográficas e de região';
+COMMENT ON COLUMN subsistema_ons_regiao.subsistema IS 'Nome normalizado do subsistema (PK) - ex: norte, nordeste, sudeste/centro-oeste, sul';
+COMMENT ON COLUMN subsistema_ons_regiao.subsistema_codigo IS 'Código único do subsistema - NO, NE, SE/CO, S';
+COMMENT ON COLUMN subsistema_ons_regiao.regiao IS 'Região geográfica do Brasil';
+COMMENT ON COLUMN subsistema_ons_regiao.nome_completo IS 'Nome completo e descritivo do subsistema';
+
+-- 2. Renomear tabela carga_ons para subsistema_ons (se ainda não foi feita)
+-- ============================================================================
+-- Backup da tabela antiga se existir
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='carga_ons') THEN
+        -- Criar tabela nova se não existir
+        CREATE TABLE IF NOT EXISTS subsistema_ons (
+            time TIMESTAMPTZ NOT NULL,
+            subsistema TEXT,
+            carga_mw DOUBLE PRECISION
+        );
+        
+        -- Copiar dados se ainda não foram copiados
+        IF (SELECT COUNT(*) FROM subsistema_ons) = 0 THEN
+            INSERT INTO subsistema_ons SELECT time, subsistema, carga_mw FROM carga_ons;
+            RAISE NOTICE 'Dados migrados de carga_ons para subsistema_ons';
+        END IF;
+        
+        -- Renomear tabela antiga para backup
+        ALTER TABLE carga_ons RENAME TO carga_ons_backup;
+        RAISE NOTICE 'Tabela carga_ons renomeada para carga_ons_backup';
+    ELSE
+        -- Criar tabela nova se carga_ons não existe
+        CREATE TABLE IF NOT EXISTS subsistema_ons (
+            time TIMESTAMPTZ NOT NULL,
+            subsistema TEXT,
+            carga_mw DOUBLE PRECISION
+        );
+    END IF;
+END $$;
+
+-- 3. Criar tabela subsistema_ons como TimescaleDB hypertable
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS subsistema_ons (
+    time TIMESTAMPTZ NOT NULL,
+    subsistema TEXT NOT NULL,
+    carga_mw DOUBLE PRECISION NOT NULL
+);
+
+COMMENT ON TABLE subsistema_ons IS 'Fatos de carga por subsistema - série temporal otimizada';
+COMMENT ON COLUMN subsistema_ons.time IS 'Timestamp UTC da medição de carga';
+COMMENT ON COLUMN subsistema_ons.subsistema IS 'Chave estrangeira para subsistema_ons_regiao';
+COMMENT ON COLUMN subsistema_ons.carga_mw IS 'Valor de carga em MW';
+
+-- 4. Adicionar constraint de integridade referencial
+-- ============================================================================
+ALTER TABLE subsistema_ons
+DROP CONSTRAINT IF EXISTS fk_subsistema_ons_regiao;
+
+ALTER TABLE subsistema_ons
+ADD CONSTRAINT fk_subsistema_ons_regiao 
+FOREIGN KEY (subsistema) REFERENCES subsistema_ons_regiao(subsistema)
+ON UPDATE CASCADE ON DELETE RESTRICT;
+
+-- 5. Criar TimescaleDB hypertable
+-- ============================================================================
+SELECT create_hypertable('subsistema_ons', 'time', if_not_exists => TRUE);
+
+-- 6. Criar índices para performance
+-- ============================================================================
+CREATE INDEX IF NOT EXISTS idx_subsistema_ons_subsistema 
+ON subsistema_ons (subsistema);
+
+CREATE INDEX IF NOT EXISTS idx_subsistema_ons_subsistema_time 
+ON subsistema_ons (subsistema, time DESC);
+
+CREATE INDEX IF NOT EXISTS idx_subsistema_ons_time 
+ON subsistema_ons (time DESC);
+
+CREATE INDEX IF NOT EXISTS idx_subsistema_ons_regiao_ativo 
+ON subsistema_ons_regiao (ativo) WHERE ativo = TRUE;
+
+-- 7. Criar view para facilitar análises (JOIN automático)
+-- ============================================================================
+CREATE OR REPLACE VIEW v_subsistema_ons_detalhado AS
+SELECT 
+    c.time,
+    c.subsistema,
+    c.carga_mw,
+    r.subsistema_codigo,
+    r.regiao,
+    r.nome_completo,
+    r.descricao,
+    DATE_TRUNC('hour', c.time) as hora_medida,
+    EXTRACT(YEAR FROM c.time)::INT as ano,
+    EXTRACT(MONTH FROM c.time)::INT as mes,
+    EXTRACT(DAY FROM c.time)::INT as dia,
+    EXTRACT(DOW FROM c.time)::INT as dia_semana
+FROM subsistema_ons c
+LEFT JOIN subsistema_ons_regiao r ON c.subsistema = r.subsistema;
+
+COMMENT ON VIEW v_subsistema_ons_detalhado IS 'View detalhada com JOIN automático entre fatos e dimensão';
+
+-- 8. Criar view de agregação por região (evita JOIN em queries)
+-- ============================================================================
+CREATE OR REPLACE VIEW v_subsistema_ons_por_regiao AS
+SELECT 
+    r.regiao,
+    r.subsistema_codigo,
+    r.subsistema,
+    c.time,
+    c.carga_mw,
+    AVG(c.carga_mw) OVER (PARTITION BY c.subsistema ORDER BY c.time ROWS BETWEEN 12 PRECEDING AND CURRENT ROW) as carga_media_12h
+FROM subsistema_ons c
+LEFT JOIN subsistema_ons_regiao r ON c.subsistema = r.subsistema;
+
+COMMENT ON VIEW v_subsistema_ons_por_regiao IS 'View com agregação por região e média móvel 12h';
+
+-- 9. Inserir dados de referência de subsistemas e regiões
+-- ============================================================================
+INSERT INTO subsistema_ons_regiao (subsistema, subsistema_codigo, regiao, nome_completo, descricao, ativo)
+VALUES 
+    ('norte', 'NO', 'Norte', 'Subsistema Norte', 'Abrange principalmente os estados do Amazonas, Amapá, Pará e Roraima', TRUE),
+    ('nordeste', 'NE', 'Nordeste', 'Subsistema Nordeste', 'Abrange os estados de Alagoas, Bahia, Ceará, Maranhão, Paraíba, Pernambuco, Piauí, Rio Grande do Norte e Sergipe', TRUE),
+    ('sudeste/centro-oeste', 'SE/CO', 'Sudeste/Centro-Oeste', 'Subsistema Sudeste/Centro-Oeste', 'Abrange São Paulo, Minas Gerais, Rio de Janeiro, Espírito Santo, Mato Grosso, Mato Grosso do Sul, Goiás e Distrito Federal', TRUE),
+    ('sul', 'S', 'Sul', 'Subsistema Sul', 'Abrange Rio Grande do Sul, Santa Catarina e Paraná', TRUE)
+ON CONFLICT (subsistema) DO UPDATE SET
+    regiao = EXCLUDED.regiao,
+    nome_completo = EXCLUDED.nome_completo,
+    subsistema_codigo = EXCLUDED.subsistema_codigo,
+    data_atualizacao = NOW();
+
+-- ============================================================================
 -- RESUMO FINAL
 -- ============================================================================
 
