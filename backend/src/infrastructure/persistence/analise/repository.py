@@ -337,58 +337,60 @@ class AnaliseRepositorySQLAlchemy(AnaliseRepository):
     def obter_distribuidoras(
         self, subsistema: Optional[str] = None
     ) -> list[str]:
-        """Get list of available electricity distributors.
+        """Get list of available electricity distributors from ANEEL database.
         
-        Returns a predefined list of major Brazilian distributors.
+        Queries the distribuidoras_aneel table for actual distributors populated from BDGD.
         Can be filtered by subsistema if provided.
+        
+        Args:
+            subsistema: Optional subsystem to filter (e.g., "SUL", "SUDESTE", "NORDESTE", "NORTE")
+            
+        Returns:
+            list[str]: Sorted list of distributor names
         """
-        # Mapping of distributors by subsystem
-        distribuidoras_por_subsistema = {
-            "SUDESTE": [
-                "CPFL Paulista",
-                "CPFL Piratininga",
-                "Energisa Paraíba",
-                "Enel São Paulo",
-                "Enel Rio",
-                "Light",
-                "CEMIG",
-                "Energisa Minas Gerais",
-            ],
-            "NORTE": [
-                "Amazonas Energia",
-                "Distribuição Acre",
-                "Distribuidora de Rondônia",
-                "Pará Distribuidora",
-                "Distribuição Amapá",
-                "Distribuição Roraima",
-                "Distribuição Tocantins",
-            ],
-            "NORDESTE": [
-                "Coelba",
-                "Energisa Paraíba",
-                "Neoenergia Pernambuco",
-                "Energisa Ceará",
-                "Energisa Piauí",
-                "Energisa Rio Grande do Norte",
-                "Energisa Sergipe",
-                "Energisa Alagoas",
-            ],
-            "SUL": [
-                "Copel",
-                "CEMIG",
-                "RGE",
-                "Energisa Santa Catarina",
-                "CEEE Equatorial",
-                "Equatorial Energia Rio Grande do Sul",
-            ],
-        }
-
-        # If subsistema is specified, return distributors for that subsystem
-        if subsistema and subsistema in distribuidoras_por_subsistema:
-            return sorted(set(distribuidoras_por_subsistema[subsistema]))
-
-        # Otherwise return all unique distributors
-        all_distribuidoras = []
-        for distributors in distribuidoras_por_subsistema.values():
-            all_distribuidoras.extend(distributors)
-        return sorted(set(all_distribuidoras))
+        try:
+            with self.engine.connect() as conn:
+                # Normalize subsistema to match database case-insensitively
+                if subsistema:
+                    # Map subsistema values to database format
+                    subsistema_map = {
+                        "SUL": "Sul",
+                        "SUDESTE": "Sudeste",
+                        "SUDESTE/CENTRO-OESTE": "Sudeste/Centro-Oeste",
+                        "NORTE": "Norte",
+                        "NORDESTE": "Nordeste",
+                    }
+                    # Get the database value or use uppercase version
+                    db_subsistema = subsistema_map.get(subsistema.upper(), subsistema)
+                    
+                    query = text("""
+                        SELECT DISTINCT nome
+                        FROM distribuidoras_aneel
+                        WHERE ativo = TRUE 
+                        AND LOWER(regiao) = LOWER(:regiao)
+                        ORDER BY nome
+                    """)
+                    result = conn.execute(query, {'regiao': db_subsistema})
+                else:
+                    query = text("""
+                        SELECT DISTINCT nome
+                        FROM distribuidoras_aneel
+                        WHERE ativo = TRUE
+                        ORDER BY nome
+                    """)
+                    result = conn.execute(query)
+                
+                rows = result.fetchall()
+                distribuidoras = [row[0] for row in rows if row[0]]
+                
+                # If no results from ANEEL table, return empty list
+                if not distribuidoras:
+                    return []
+                
+                return distribuidoras
+        except Exception as e:
+            # Log error but don't crash - return empty list
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Erro ao obter distribuidoras do banco: {e}")
+            return []

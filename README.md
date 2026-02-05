@@ -105,7 +105,7 @@ docker compose exec -T db psql -U admin -d energy_monitor -c "CREATE EXTENSION I
 ## Executar ETL
 ```powershell
 
-docker exec energy_db psql -U admin -d energy_monitor -c "\dt" 2>&1
+# docker exec energy_db psql -U admin -d energy_monitor -c "\dt" 2>&1
 
 # Extração e carga de dados ANEEL BDGD
 docker compose exec -T etl python /app/src/extractors/aneel_bdgd_local/etl_aneel_bdgd_local.py
