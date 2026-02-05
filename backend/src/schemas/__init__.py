@@ -2,6 +2,7 @@
 
 from .analise import (
     AlertaFraude,
+    CargaDistribuidoraAtual,
     CargaOcultaItem,
     ClasseConsumoItem,
     EstabelecimentoContagem,
@@ -66,6 +67,7 @@ __all__ = [
     "ConsultaSateliteRequest",
     # Analise
     "CargaOcultaItem",
+    "CargaDistribuidoraAtual",
     "ClasseConsumoItem",
     "AlertaFraude",
     "EstabelecimentoContagem",

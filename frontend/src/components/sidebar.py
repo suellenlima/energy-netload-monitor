@@ -50,7 +50,7 @@ def render_sidebar(client: ApiClient) -> SidebarState:
         st.session_state.dashboard_loaded = False
 
     if "subsistema" not in st.session_state:
-        st.session_state.subsistema = "SUDESTE"
+        st.session_state.subsistema = "Sudeste/Centro-Oeste"
 
     if "distribuidora" not in st.session_state:
         st.session_state.distribuidora = ""
@@ -61,20 +61,40 @@ def render_sidebar(client: ApiClient) -> SidebarState:
     # Controles de filtros (não causam recarregamento automático)
     opcoes_subsistemas = _load_subsistemas(client)
     
+    # Garantir que "Sudeste/Centro-Oeste" seja o padrão
+    subsistema_padrao = "Sudeste/Centro-Oeste"
+    if subsistema_padrao not in opcoes_subsistemas:
+        opcoes_subsistemas.insert(0, subsistema_padrao)
+    
+    # Encontrar índice do subsistema atual
+    subsistema_index = 0
+    if st.session_state.subsistema in opcoes_subsistemas:
+        subsistema_index = opcoes_subsistemas.index(st.session_state.subsistema)
+    else:
+        subsistema_index = opcoes_subsistemas.index(subsistema_padrao) if subsistema_padrao in opcoes_subsistemas else 0
+    
     subsistema = st.sidebar.selectbox(
         "Subsistema (ONS)",
         opcoes_subsistemas,
-        index=opcoes_subsistemas.index(st.session_state.subsistema) if st.session_state.subsistema in opcoes_subsistemas else 0,
+        index=subsistema_index,
         key="subsistema_select"
     )
 
     st.sidebar.subheader("Análise por Distribuidora")
     opcoes_distribuidoras = _load_distribuidoras(client, subsistema)
 
+    # Definir distribuidora padrão baseada no subsistema
+    distribuidora_padrao = ""
+    if subsistema == "Sudeste/Centro-Oeste":
+        distribuidora_padrao = "LIGHT"
+    
     # Encontrar índice da distribuidora atual
     dist_index = 0
-    if st.session_state.distribuidora in opcoes_distribuidoras:
+    if st.session_state.distribuidora and st.session_state.distribuidora in opcoes_distribuidoras:
         dist_index = opcoes_distribuidoras.index(st.session_state.distribuidora)
+    elif distribuidora_padrao and distribuidora_padrao in opcoes_distribuidoras:
+        dist_index = opcoes_distribuidoras.index(distribuidora_padrao)
+        st.session_state.distribuidora = distribuidora_padrao
 
     distribuidora = st.sidebar.selectbox(
         "Distribuidora:",
