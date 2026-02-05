@@ -103,10 +103,6 @@ docker compose exec -T db psql -U admin -d energy_monitor -c "CREATE EXTENSION I
 ## Executar ETL
 ```powershell
 
-bash infrastructure/database/init_schema_aneel_bdgd.sh
-or 
-docker cp infrastructure/database/schema_aneel_bdgd.sql energy_db:/tmp/schema.sql ; docker exec energy_db psql -U admin -d energy_monitor -f /tmp/schema.sql 2>&1 | Select-Object -Last 40
-
 docker exec energy_db psql -U admin -d energy_monitor -c "\dt" 2>&1
 
 # Extração e carga de dados ANEEL BDGD
@@ -415,3 +411,4 @@ pytest tests/test_load_profiles.py
 pytest tests/test_synthetic_load.py
 pytest tests/test_subestacao_mix.py
 ```
+

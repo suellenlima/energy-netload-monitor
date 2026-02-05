@@ -2,7 +2,7 @@
 
 ## 📋 Visão Geral
 
-O arquivo `schema_aneel_bdgd.sql` define a **estrutura de dados única** para infraestrutura elétrica ANEEL BDGD e detecção de telhados com painéis solares. Contém:
+O arquivo `schema.sql (unificado)` define a **estrutura de dados única** para infraestrutura elétrica ANEEL BDGD e detecção de telhados com painéis solares. Contém:
 
 - **8 tabelas principais** para transformadores, subestações, consumidores (BT/MT/AT) e telhados
 - **5 views** pré-calculadas para análise rápida
@@ -526,7 +526,7 @@ ORDER BY variacao DESC;
 ### Criar Schema (Primeira Vez)
 
 ```bash
-psql -U usuario -d banco_energia -f schema_aneel_bdgd.sql
+psql -U usuario -d banco_energia -f schema.sql (unificado)
 ```
 
 ### Verificar Tabelas Criadas
@@ -659,7 +659,7 @@ DELETE FROM telhados_detectados_transformador WHERE id = 123;
 
 - [ ] PostgreSQL 12+ com PostGIS instalado
 - [ ] Extensões postgis e postgis_raster criadas
-- [ ] Schema executado (schema_aneel_bdgd.sql)
+- [ ] Schema executado (schema.sql (unificado))
 - [ ] Tabelas criadas (verificar com `\d`)
 - [ ] Views criadas (verificar com SELECT FROM vw_*)
 - [ ] Índices criados (verificar performance)
@@ -674,3 +674,4 @@ DELETE FROM telhados_detectados_transformador WHERE id = 123;
 **Versão**: 2.1  
 **Data**: 2026-02-04  
 **Status**: ✅ Produção
+
