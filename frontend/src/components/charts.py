@@ -51,8 +51,8 @@ def render_carga_section(
 
     Args:
         df_carga: DataFrame com dados de carga (colunas: hora, carga_ons, estimativa_solar_mw, carga_real_estimada)
-        impacto_projecao_mw: Impacto estimado de fraudes (opcional)
-        multiplicador: Fator multiplicador para projeção de fraudes
+        impacto_projecao_mw: Impacto estimado de MMGD nao mapeada (opcional)
+        multiplicador: Fator multiplicador para projeção de MMGD nao mapeada
         subsistema: Nome do subsistema elétrico
     """
     st.header(f"Análise de Carga: Líquida vs Real ({subsistema})")

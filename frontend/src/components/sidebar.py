@@ -84,14 +84,14 @@ def render_sidebar(client: ApiClient) -> SidebarState:
     )
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Cruzamento com IA")
+    st.sidebar.subheader("Cenário de MMGD Detectada")
     multiplicador = st.sidebar.slider(
-        "Projeção de Fraudes (Quantidade de casos)",
+        "Projeção de MMGDs detectadas (Multiplicador de casos)",
         1, 5000,
         st.session_state.multiplicador,
         key="multiplicador_slider"
     )
-    st.sidebar.info("Arraste para simular o impacto de múltiplas fraudes na rede.")
+    st.sidebar.info("Arraste para simular o impacto de múltiplas placas solares não mapeadas na rede.")
 
     # Botão de atualização - quando clicado, marca o dashboard como carregado
     if st.sidebar.button("Atualizar Dashboard", type="primary", key="btn_update_dashboard"):

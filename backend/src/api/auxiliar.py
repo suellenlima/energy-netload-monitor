@@ -56,13 +56,24 @@ def get_lista_distribuidoras(
     - **subsistema**: Filtrar por subsistema (SUDESTE, NORTE, NORDESTE, SUL) - opcional
     """
     try:
-        # Normalize subsistema to uppercase for validation
-        normalized_subsistema = subsistema.upper() if subsistema else None
+        # Support multiple subsistemas separated by "/" (e.g., "Sudeste/Centro-Oeste")
+        # For now, use the first valid one or handle as OR query
+        normalized_subsistema = None
         
-        # Validate against enum values
-        valid_values = {"SUDESTE", "NORTE", "NORDESTE", "SUL"}
-        if normalized_subsistema and normalized_subsistema not in valid_values:
-            raise ValueError(f"Subsistema inválido: {subsistema}. Valores válidos: {valid_values}")
+        if subsistema:
+            # Split by "/" and take the first valid subsistema
+            parts = [s.strip().upper() for s in subsistema.split("/")]
+            valid_values = {"SUDESTE", "NORTE", "NORDESTE", "SUL"}
+            
+            # Try to find the first valid subsistema
+            for part in parts:
+                if part in valid_values:
+                    normalized_subsistema = part
+                    break
+            
+            # If none found, raise error
+            if not normalized_subsistema:
+                raise ValueError(f"Nenhum subsistema válido em: {subsistema}. Valores válidos: {valid_values}")
         
         return repo.obter_distribuidoras(normalized_subsistema)
     except Exception as exc:

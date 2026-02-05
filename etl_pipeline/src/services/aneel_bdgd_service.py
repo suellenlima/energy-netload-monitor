@@ -126,57 +126,98 @@ class TransformerService:
         self.engine = engine
     
     @staticmethod
-    def extract(gdf: gpd.GeoDataFrame, distribuidora: str) -> pd.DataFrame:
-        """Extrai dados de transformadores"""
+    def extract(gdf: gpd.GeoDataFrame, distribuidora: str, layer_name: str = None) -> pd.DataFrame:
+        """
+        Extrai dados de transformadores
+        
+        Args:
+            gdf: GeoDataFrame com dados
+            distribuidora: Nome da distribuidora
+            layer_name: Nome da camada (usado para inferir tipo quando tensões não existem)
+        """
         logger.info(f"Extraindo transformadores...")
+        logger.debug(f"  Colunas disponíveis: {list(gdf.columns)}")
         
         gdf, stats = GeometryService.normalize_geometry(gdf)
         
         df = pd.DataFrame()
-        if 'COD_ID' in gdf.columns:
-            df['codigo'] = gdf['COD_ID'].astype(str)
-            df['nome'] = gdf.get('NOME', None)
-            df['distribuidora'] = distribuidora
-            
-            if 'SUB' in gdf.columns:
-                df['subestacao_codigo'] = gdf['SUB'].astype(str)
-            if 'POT_NOM' in gdf.columns:
-                df['potencia_kva'] = pd.to_numeric(gdf['POT_NOM'], errors='coerce')
-            if 'TEN_PRI' in gdf.columns:
-                df['tensao_primaria_kv'] = pd.to_numeric(gdf['TEN_PRI'], errors='coerce')
-            if 'TEN_SEC' in gdf.columns:
-                df['tensao_secundaria_kv'] = pd.to_numeric(gdf['TEN_SEC'], errors='coerce')
-            
-            # Classificar tipo
-            df['tipo_tensao'] = df.apply(
-                lambda row: ClassificationService.classify_transformer_type(
-                    row.get('tensao_primaria_kv'), row.get('tensao_secundaria_kv')
-                ),
-                axis=1
+        
+        # Procurar coluna de código
+        cod_col = None
+        for col in ['COD_ID', 'CODID', 'ID', 'codigo']:
+            if col in gdf.columns:
+                cod_col = col
+                break
+        
+        if cod_col is None:
+            logger.warning(f"  ⚠ Coluna de código não encontrada. Esperado: COD_ID/codigo")
+            logger.warning(f"    Colunas disponíveis: {list(gdf.columns)}")
+            return df
+        
+        df['codigo'] = gdf[cod_col].astype(str)
+        df['nome'] = gdf.get('NOME', None) or gdf.get('NOM', None)
+        df['distribuidora'] = distribuidora
+        
+        if 'SUB' in gdf.columns:
+            df['subestacao_codigo'] = gdf['SUB'].astype(str)
+        if 'POT_NOM' in gdf.columns:
+            df['potencia_kva'] = pd.to_numeric(gdf['POT_NOM'], errors='coerce')
+        if 'TEN_PRI' in gdf.columns:
+            df['tensao_primaria_kv'] = pd.to_numeric(gdf['TEN_PRI'], errors='coerce')
+        if 'TEN_SEC' in gdf.columns:
+            df['tensao_secundaria_kv'] = pd.to_numeric(gdf['TEN_SEC'], errors='coerce')
+        
+        # Classificar tipo - IMPORTANTE: inferir da camada se tensões não disponíveis
+        def classify_type(row, layer_nm):
+            # Primeiro tenta por tensões
+            tipo = ClassificationService.classify_transformer_type(
+                row.get('tensao_primaria_kv'), row.get('tensao_secundaria_kv')
             )
+            if tipo is not None:
+                return tipo
             
-            df['latitude'] = gdf.geometry.y
-            df['longitude'] = gdf.geometry.x
-            df['data_criacao'] = datetime.now()
-            df['data_atualizacao'] = datetime.now()
+            # Se não encontrou, infere pela camada (UNTRMT=MT, UNTRAT=AT, UNTRD=genérico)
+            if layer_nm:
+                layer_upper = str(layer_nm).upper()
+                if 'UNTRMT' in layer_upper or 'TRANSFORMADOR_MT' in layer_upper:
+                    return 'MT'
+                elif 'UNTRAT' in layer_upper or 'TRANSFORMADOR_AT' in layer_upper:
+                    return 'AT'
             
-            # Remover duplicatas
-            if 'codigo' in df.columns:
-                df = df.drop_duplicates(subset=['codigo'], keep='first')
-            
-            bt_count = (df['tipo_tensao'] == 'BT').sum()
-            mt_count = (df['tipo_tensao'] == 'MT').sum()
-            at_count = (df['tipo_tensao'] == 'AT').sum()
-            logger.info(f"✓ {len(df)} transformadores extraídos (BT: {bt_count}, MT: {mt_count}, AT: {at_count})")
+            return None
+        
+        df['tipo_tensao'] = df.apply(lambda row: classify_type(row, layer_name), axis=1)
+        
+        # Calcular coordenadas - suporta Point e Polygon
+        def get_coords(geom):
+            if geom.geom_type == 'Point':
+                return geom.y, geom.x
+            else:  # Polygon, LineString, etc
+                centroid = geom.centroid
+                return centroid.y, centroid.x
+        
+        coords = gdf.geometry.apply(get_coords)
+        df['latitude'] = coords.apply(lambda x: x[0])
+        df['longitude'] = coords.apply(lambda x: x[1])
+        df['data_criacao'] = datetime.now()
+        df['data_atualizacao'] = datetime.now()
+        
+        # Remover duplicatas
+        if 'codigo' in df.columns:
+            df = df.drop_duplicates(subset=['codigo'], keep='first')
+        
+        bt_count = (df['tipo_tensao'] == 'BT').sum()
+        mt_count = (df['tipo_tensao'] == 'MT').sum()
+        at_count = (df['tipo_tensao'] == 'AT').sum()
+        logger.info(f"✓ {len(df)} transformadores extraídos (BT: {bt_count}, MT: {mt_count}, AT: {at_count})")
         
         return df
     
     def insert(self, df: pd.DataFrame, distribuidora: str) -> int:
         """
-        Insere transformadores no banco
+        Insere ou atualiza transformadores no banco usando UPSERT
         
         NOTA: Schema é gerenciado em infrastructure/database/schema.sql (unificado)
-        Este método APENAS insere dados, não cria/altera tabelas
         """
         if df.empty:
             logger.warning(f"Nenhum transformador para carregar")
@@ -184,13 +225,54 @@ class TransformerService:
         
         inserted = 0
         try:
-            # Usar pandas to_sql para inserção simples (seguro, sem SQL inline)
-            df.to_sql('transformadores_aneel', self.engine, if_exists='append', index=False)
-            inserted = len(df)
-            logger.info(f"✓ {inserted} transformadores carregados")
+            from sqlalchemy import text
+            
+            # Preparar dados para UPSERT
+            with self.engine.connect() as conn:
+                for _, row in df.iterrows():
+                    stmt = text("""
+                        INSERT INTO transformadores_aneel 
+                            (codigo, nome, distribuidora, subestacao_codigo, potencia_kva, 
+                             tensao_primaria_kv, tensao_secundaria_kv, tipo_tensao, 
+                             latitude, longitude, data_criacao, data_atualizacao)
+                        VALUES 
+                            (:cod, :nome, :dist, :sub, :pot, :tp, :ts, :tipo, :lat, :lon, :cr, :au)
+                        ON CONFLICT (codigo) DO UPDATE SET
+                            nome = EXCLUDED.nome,
+                            distribuidora = EXCLUDED.distribuidora,
+                            subestacao_codigo = EXCLUDED.subestacao_codigo,
+                            potencia_kva = EXCLUDED.potencia_kva,
+                            tensao_primaria_kv = EXCLUDED.tensao_primaria_kv,
+                            tensao_secundaria_kv = EXCLUDED.tensao_secundaria_kv,
+                            tipo_tensao = EXCLUDED.tipo_tensao,
+                            latitude = EXCLUDED.latitude,
+                            longitude = EXCLUDED.longitude,
+                            data_atualizacao = EXCLUDED.data_atualizacao
+                    """)
+                    
+                    conn.execute(stmt, {
+                        'cod': str(row.get('codigo')),
+                        'nome': row.get('nome'),
+                        'dist': str(row.get('distribuidora')),
+                        'sub': row.get('subestacao_codigo'),
+                        'pot': float(row.get('potencia_kva')) if pd.notna(row.get('potencia_kva')) else None,
+                        'tp': float(row.get('tensao_primaria_kv')) if pd.notna(row.get('tensao_primaria_kv')) else None,
+                        'ts': float(row.get('tensao_secundaria_kv')) if pd.notna(row.get('tensao_secundaria_kv')) else None,
+                        'tipo': row.get('tipo_tensao'),
+                        'lat': float(row.get('latitude')) if pd.notna(row.get('latitude')) else None,
+                        'lon': float(row.get('longitude')) if pd.notna(row.get('longitude')) else None,
+                        'cr': row.get('data_criacao'),
+                        'au': row.get('data_atualizacao')
+                    })
+                    inserted += 1
+                
+                conn.commit()
+            
+            logger.info(f"✓ {inserted} transformadores carregados/atualizados")
         
         except Exception as e:
             logger.error(f"Erro ao inserir transformadores: {e}")
+            raise
         
         return inserted
 
@@ -205,39 +287,69 @@ class SubstationService:
     def extract(gdf: gpd.GeoDataFrame, distribuidora: str) -> pd.DataFrame:
         """Extrai dados de subestações"""
         logger.info(f"Extraindo subestações...")
+        logger.debug(f"  Colunas disponíveis: {list(gdf.columns)}")
         
         gdf, stats = GeometryService.normalize_geometry(gdf)
         
         df = pd.DataFrame()
-        if 'COD_ID' in gdf.columns and 'NOM' in gdf.columns:
-            grouped = gdf.groupby('COD_ID', as_index=False).first()
-            
-            df['codigo'] = grouped['COD_ID'].astype(str)
-            df['nome'] = grouped['NOM'].astype(str)
-            df['nome'] = df.apply(
-                lambda row: GeometryService.clean_substation_name(row['nome'], row['codigo']),
-                axis=1
-            )
-            
-            if 'CLAS_TEN' in grouped.columns:
-                df['tensao_kv'] = grouped['CLAS_TEN']
-            
-            df['latitude'] = grouped.geometry.y
-            df['longitude'] = grouped.geometry.x
-            df['distribuidora'] = distribuidora
-            df['data_criacao'] = datetime.now()
-            df['data_atualizacao'] = datetime.now()
-            
-            logger.info(f"✓ {len(df)} subestações extraídas")
+        
+        # Tentar diferentes padrões de coluna para COD_ID e NOM
+        cod_col = None
+        nom_col = None
+        
+        # Procurar coluna de código
+        for col in ['COD_ID', 'CODID', 'ID', 'codigo']:
+            if col in gdf.columns:
+                cod_col = col
+                break
+        
+        # Procurar coluna de nome
+        for col in ['NOM', 'NOME', 'nome', 'NAME']:
+            if col in gdf.columns:
+                nom_col = col
+                break
+        
+        if cod_col is None or nom_col is None:
+            logger.warning(f"  ⚠ Colunas não encontradas. Esperado: COD_ID/codigo e NOM/nome")
+            logger.warning(f"    Colunas disponíveis: {list(gdf.columns)}")
+            return df
+        
+        grouped = gdf.groupby(cod_col, as_index=False).first()
+        
+        df['codigo'] = grouped[cod_col].astype(str)
+        df['nome'] = grouped[nom_col].astype(str)
+        df['nome'] = df.apply(
+            lambda row: GeometryService.clean_substation_name(row['nome'], row['codigo']),
+            axis=1
+        )
+        
+        if 'CLAS_TEN' in grouped.columns:
+            df['tensao_kv'] = grouped['CLAS_TEN']
+        
+        # Calcular coordenadas - suporta Point e Polygon
+        def get_coords(geom):
+            if geom.geom_type == 'Point':
+                return geom.y, geom.x
+            else:  # Polygon, LineString, etc
+                centroid = geom.centroid
+                return centroid.y, centroid.x
+        
+        coords = grouped.geometry.apply(get_coords)
+        df['latitude'] = coords.apply(lambda x: x[0])
+        df['longitude'] = coords.apply(lambda x: x[1])
+        df['distribuidora'] = distribuidora
+        df['data_criacao'] = datetime.now()
+        df['data_atualizacao'] = datetime.now()
+        
+        logger.info(f"✓ {len(df)} subestações extraídas")
         
         return df
     
     def insert(self, df: pd.DataFrame, distribuidora: str) -> int:
         """
-        Insere subestações no banco
+        Insere ou atualiza subestações no banco usando UPSERT
         
         NOTA: Schema é gerenciado em infrastructure/database/schema.sql (unificado)
-        Este método APENAS insere dados, não cria/altera tabelas
         """
         if df.empty:
             logger.warning(f"Nenhuma subestação para carregar")
@@ -245,13 +357,44 @@ class SubstationService:
         
         inserted = 0
         try:
-            # Usar pandas to_sql para inserção simples (seguro, sem SQL inline)
-            df.to_sql('subestacoes_aneel', self.engine, if_exists='append', index=False)
-            inserted = len(df)
-            logger.info(f"✓ {inserted} subestações carregadas")
+            from sqlalchemy import text
+            
+            # Preparar dados para UPSERT
+            with self.engine.connect() as conn:
+                for _, row in df.iterrows():
+                    stmt = text("""
+                        INSERT INTO subestacoes_aneel 
+                            (codigo, nome, latitude, longitude, distribuidora, tensao_kv, data_criacao, data_atualizacao)
+                        VALUES 
+                            (:codigo, :nome, :lat, :lon, :dist, :tensao, :data_cri, :data_atu)
+                        ON CONFLICT (codigo) DO UPDATE SET
+                            nome = EXCLUDED.nome,
+                            latitude = EXCLUDED.latitude,
+                            longitude = EXCLUDED.longitude,
+                            distribuidora = EXCLUDED.distribuidora,
+                            tensao_kv = EXCLUDED.tensao_kv,
+                            data_atualizacao = EXCLUDED.data_atualizacao
+                    """)
+                    
+                    conn.execute(stmt, {
+                        'codigo': str(row.get('codigo')),
+                        'nome': row.get('nome'),
+                        'lat': float(row.get('latitude')) if pd.notna(row.get('latitude')) else None,
+                        'lon': float(row.get('longitude')) if pd.notna(row.get('longitude')) else None,
+                        'dist': str(row.get('distribuidora')),
+                        'tensao': row.get('tensao_kv'),
+                        'data_cri': row.get('data_criacao'),
+                        'data_atu': row.get('data_atualizacao')
+                    })
+                    inserted += 1
+                
+                conn.commit()
+            
+            logger.info(f"✓ {inserted} subestações carregadas/atualizadas")
         
         except Exception as e:
             logger.error(f"Erro ao inserir subestações: {e}")
+            raise
         
         return inserted
 
