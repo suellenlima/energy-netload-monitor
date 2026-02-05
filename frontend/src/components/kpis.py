@@ -3,9 +3,16 @@ Componente de KPIs executivos no topo do dashboard.
 Exibe métricas principais sempre visíveis acima das tabs.
 """
 
+import logging
+from datetime import datetime, timedelta
+
+import pandas as pd
 import streamlit as st
+
 from services.api_client import ApiClient
 from utils.errors import show_error
+
+logger = logging.getLogger(__name__)
 
 
 def _apply_kpi_card_style():
@@ -141,8 +148,6 @@ def render_executive_kpis(
             carga_anterior = 0
             delta_carga = 0
             try:
-                from datetime import datetime, timedelta
-                
                 # Se for endpoint de distribuidora com data_medicao
                 if distribuidora and "data_medicao" in response.data:
                     data_atual = pd.to_datetime(response.data.get("data_medicao"))
