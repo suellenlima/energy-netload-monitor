@@ -45,8 +45,18 @@ class CargaOcultaItem(BaseModel):
     )
 
 
+class CargaDistribuidoraAtual(BaseModel):
+    """Carga atual em tempo real de uma distribuidora."""
+
+    distribuidora: str = Field(..., description="Nome da distribuidora")
+    carga_mw: float = Field(..., description="Carga em MW", ge=0)
+    data_medicao: datetime = Field(..., description="Timestamp da medição")
+    subsistema: str | None = Field(None, description="Subsistema ONS")
+
+
 class ClasseConsumoItem(BaseModel):
     """Consumo por classe de consumidor."""
+
 
     classe: str
     mw: float

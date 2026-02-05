@@ -16,6 +16,7 @@ from components.charts import (
     render_estabelecimentos_compact,
     render_perfis_carga,
 )
+from components.historico_carga import render_historico_carga, render_comparacao_distribuidoras
 from components.kpis import render_executive_kpis
 from components.realtime import render_realtime_dashboard
 from components.sidebar import render_sidebar
@@ -159,6 +160,18 @@ if state.refresh:
             subsistema=state.subsistema,
             distribuidora=state.distribuidora,
             auto_refresh=False
+        )
+
+        st.divider()
+
+        # ==================== HISTÓRICO DE CARGA ====================
+        st.markdown("### 📈 Histórico de Carga da Distribuidora")
+        st.caption("Evolução temporal da carga, geração MMGD e consumo estimado")
+        
+        render_historico_carga(
+            client,
+            subsistema=state.subsistema,
+            distribuidora=state.distribuidora
         )
 
     # ==================== TAB 3: SUBESTAÇÕES ====================
