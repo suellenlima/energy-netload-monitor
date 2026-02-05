@@ -20,6 +20,7 @@ from ..core import DatabaseError
 from ..infrastructure.persistence.analise import AnaliseRepositorySQLAlchemy
 from ..schemas import (
     AlertaFraude,
+    CargaDistribuidoraAtual,
     CargaOcultaItem,
     ClasseConsumoItem,
     EstabelecimentoContagem,
@@ -58,6 +59,158 @@ def calcular_carga_oculta(
     except Exception as exc:
         logger.error(f"Erro ao calcular carga oculta: {exc}", exc_info=True)
         raise DatabaseError("Falha ao calcular carga oculta") from exc
+
+
+@router.get("/carga-atual-distribuidora")
+def obter_carga_atual_distribuidora(
+    distribuidora: DistribuidoraQuery,
+):
+    """
+    Obtém a carga ATUAL (tempo real) da distribuidora com dados medidos.
+
+    Retorna a última carga medida para a distribuidora especificada,
+    com timestamp da medição.
+
+    **Parâmetros:**
+    - **distribuidora**: Nome da distribuidora (LIGHT, ENEL, IENERGIA, etc)
+
+    **Resposta:**
+    ```json
+    {
+      "distribuidora": "LIGHT",
+      "carga_ons_mw": 177.82,
+      "data_medicao": "2026-02-05T22:59:48.735958",
+      "subsistema": "Sudeste/Centro-Oeste",
+      "status": "ok"
+    }
+    ```
+    """
+    try:
+        from ..core.database import get_engine
+        import pandas as pd
+        from sqlalchemy import text
+        
+        engine = get_engine()
+        
+        # Query para obter última carga da distribuidora
+        query = text(f"""
+            SELECT DISTINCT ON (distribuidora)
+                distribuidora,
+                carga_mw,
+                data_medicao,
+                subsistema
+            FROM carga_distribuidoras
+            WHERE distribuidora = :dist
+            ORDER BY distribuidora, data_medicao DESC
+            LIMIT 1
+        """)
+        
+        with engine.connect() as conn:
+            resultado = conn.execute(query, {"dist": distribuidora})
+            row = resultado.fetchone()
+        
+        if not row:
+            return {
+                "distribuidora": distribuidora,
+                "carga_ons_mw": 0.0,
+                "data_medicao": None,
+                "subsistema": None,
+                "status": "Sem dados"
+            }
+        
+        return {
+            "distribuidora": row[0],
+            "carga_ons_mw": float(row[1]),
+            "data_medicao": row[2],
+            "subsistema": row[3],
+            "status": "ok"
+        }
+        
+    except Exception as exc:
+        logger.error(f"Erro ao obter carga atual distribuidora: {exc}", exc_info=True)
+        return {
+            "distribuidora": distribuidora,
+            "carga_ons_mw": 0.0,
+            "data_medicao": None,
+            "subsistema": None,
+            "status": f"Erro: {str(exc)}"
+        }
+
+
+@router.get("/carga-distribuidor-tempo-real", response_model=list[CargaDistribuidoraAtual])
+def obter_carga_distribuidora_tempo_real(
+    distribuidora: DistribuidoraQuery = None,
+):
+    """
+    Obtém a carga em tempo real das distribuidoras (dados atualizados a cada hora).
+
+    Esta é a verdadeira carga da distribuidora baseada em medições reais,
+    não em estimativas. Os dados são atualizados via ETL a cada hora.
+
+    **Parâmetros:**
+    - **distribuidora**: Filtrar por distribuidora (opcional - retorna todas se vazio)
+
+    **Resposta:**
+    ```json
+    [
+      {
+        "distribuidora": "LIGHT",
+        "carga_mw": 450.5,
+        "data_medicao": "2026-02-05T22:00:00",
+        "subsistema": "Sudeste/Centro-Oeste"
+      }
+    ]
+    ```
+    """
+    try:
+        engine = get_engine()
+        
+        # Query para obter última carga de cada distribuidora
+        if distribuidora:
+            query = f"""
+                SELECT DISTINCT ON (distribuidora)
+                    distribuidora,
+                    carga_mw,
+                    data_medicao,
+                    subsistema
+                FROM carga_distribuidoras
+                WHERE distribuidora = '{distribuidora}'
+                ORDER BY distribuidora, data_medicao DESC
+                LIMIT 1
+            """
+        else:
+            query = """
+                SELECT DISTINCT ON (distribuidora)
+                    distribuidora,
+                    carga_mw,
+                    data_medicao,
+                    subsistema
+                FROM carga_distribuidoras
+                ORDER BY distribuidora, data_medicao DESC
+            """
+        
+        import pandas as pd
+        df = pd.read_sql(query, engine)
+        
+        if df.empty:
+            return []
+        
+        # Converter para list de dicts com tipos corretos
+        resultado = [
+            {
+                "distribuidora": row['distribuidora'],
+                "carga_mw": float(row['carga_mw']),
+                "data_medicao": row['data_medicao'],
+                "subsistema": row['subsistema'],
+            }
+            for _, row in df.iterrows()
+        ]
+        
+        return resultado
+
+    except Exception as exc:
+        logger.error(f"Erro ao obter carga distribuidor tempo real: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao obter carga em tempo real") from exc
 
 
 @router.get("/classes-consumo", response_model=list[ClasseConsumoItem])
