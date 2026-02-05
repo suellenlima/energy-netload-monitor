@@ -27,7 +27,7 @@ from services.api_client import ApiClient
 # ==================== CONFIGURAÇÃO INICIAL ====================
 st.set_page_config(page_title=APP_TITLE, layout=LAYOUT, initial_sidebar_state="expanded")
 
-st.title("⚡ Monitoramento Avançado de Carga Líquida")
+st.title("⚡ Mapa Inteligente de Perfis de Carga e Geração Distribuída")
 
 # ==================== TOOLTIP EDUCATIVO (SEMPRE VISÍVEL) ====================
 with st.expander("ℹ️ Entenda os conceitos do sistema", expanded=False):

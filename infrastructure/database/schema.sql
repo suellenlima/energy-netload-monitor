@@ -416,9 +416,9 @@ CREATE OR REPLACE FUNCTION aneel_atualizar_geometria_transformadores()
 RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.latitude IS NOT NULL AND NEW.longitude IS NOT NULL THEN
-        NEW.geom := ST_SetSRID(ST_MakePoint(NEW.longitude, NEW.latitude), 4326);
+        NEW.localizacao := ST_SetSRID(ST_MakePoint(NEW.longitude, NEW.latitude), 4326);
     END IF;
-    NEW.updated_at := NOW();
+    NEW.data_atualizacao := NOW();
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

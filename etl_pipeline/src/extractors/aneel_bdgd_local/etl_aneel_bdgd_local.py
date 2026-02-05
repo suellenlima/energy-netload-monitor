@@ -89,7 +89,7 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Camadas de interesse e seus aliases
 LAYER_PATTERNS = {
-    'transformadores': ['UNTRD', 'transformador', 'trafo', 'TRANSFORMADOR', 'TRAFO'],
+    'transformadores': ['UNTRD', 'transformador', 'trafo', 'TRANSFORMADOR', 'TRAFO', 'UNTR', 'UNTRMT', 'UNTRAT'],
     'subestacoes': ['CTMT', 'SUB', 'subestacao', 'subest', 'SUBESTACAO', 'SUBEST', 'SE'],
     'consumidores': ['UC', 'consumidor', 'ponto', 'CONSUMIDOR', 'PONTO', 'cliente'],
 }
@@ -288,6 +288,7 @@ def discover_layers(gdb_path: Path) -> Dict[str, List[str]]:
         import fiona
         layer_list = fiona.listlayers(str(gdb_path))
         logger.debug(f"  Camadas disponíveis: {layer_list}")
+        logger.info(f"  ℹ️ Camadas no GDB: {', '.join([str(l) for l in layer_list])}")
         
         for layer_name in layer_list:
             if isinstance(layer_name, tuple):
@@ -933,6 +934,8 @@ def process_distribuidora(dist_path: Path, dist_name: str, transformer_svc, subs
                 logger.warning(f"    ⚠ Erro ao carregar CTMT: {e}")
         
         if not df.empty:
+            # Aplicar simplificação de nome da distribuidora
+            df['distribuidora'] = simplificar_nome_distribuidora(dist_name)
             n_inserted = substation_svc.insert(df, dist_name)
             stats['subestacoes_inseridas'] = n_inserted
         else:
@@ -950,15 +953,19 @@ def process_distribuidora(dist_path: Path, dist_name: str, transformer_svc, subs
             logger.info(f"    Camada: {layer_name}")
             
             gdf = gpd.read_file(str(gdb_path), layer=layer_name)
-            df = TransformerService.extract(gdf, dist_name)
+            df = TransformerService.extract(gdf, dist_name, layer_name=layer_name)
             
             if not df.empty:
                 # Extrair nome verdadeiro da distribuidora (primeiro valor único)
                 dist_real = df['distribuidora'].unique()
                 if len(dist_real) > 0 and pd.notna(dist_real[0]):
                     # Simplificar nome: "IENERGIA_87_2021-02-28..." -> "IENERGIA"
-                    stats['distribuidora_real'] = simplificar_nome_distribuidora(str(dist_real[0]))
-                    logger.info(f"  ✓ Distribuidora identificada: {stats['distribuidora_real']}")
+                    dist_simplificado = simplificar_nome_distribuidora(str(dist_real[0]))
+                    stats['distribuidora_real'] = dist_simplificado
+                    logger.info(f"  ✓ Distribuidora identificada: {dist_simplificado}")
+                    
+                    # Aplicar simplificação ao DataFrame
+                    df['distribuidora'] = dist_simplificado
                 
                 n_inserted = transformer_svc.insert(df, dist_name)
                 stats['transformadores_inseridos'] = n_inserted
