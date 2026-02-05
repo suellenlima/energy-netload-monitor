@@ -248,6 +248,25 @@ def get_distribuidoras() -> Dict[str, Path]:
     return distribuidoras
 
 
+def simplificar_nome_distribuidora(nome_completo: str) -> str:
+    """
+    Simplifica nome da distribuidora extrayendo apenas a primeira palavra
+    Ex: "IENERGIA_87_2021-02-28_M10_20210902-1755" -> "IENERGIA"
+    
+    Args:
+        nome_completo: Nome completo da distribuidora
+        
+    Returns:
+        str: Nome simplificado (primeira palavra)
+    """
+    if not nome_completo:
+        return ""
+    
+    # Extrair primeira palavra (antes de underscore ou número)
+    primeiro_nome = nome_completo.split('_')[0].upper()
+    return primeiro_nome
+
+
 def discover_layers(gdb_path: Path) -> Dict[str, List[str]]:
     """
     Descobre todas as camadas disponíveis em um GDB
@@ -937,7 +956,8 @@ def process_distribuidora(dist_path: Path, dist_name: str, transformer_svc, subs
                 # Extrair nome verdadeiro da distribuidora (primeiro valor único)
                 dist_real = df['distribuidora'].unique()
                 if len(dist_real) > 0 and pd.notna(dist_real[0]):
-                    stats['distribuidora_real'] = str(dist_real[0])
+                    # Simplificar nome: "IENERGIA_87_2021-02-28..." -> "IENERGIA"
+                    stats['distribuidora_real'] = simplificar_nome_distribuidora(str(dist_real[0]))
                     logger.info(f"  ✓ Distribuidora identificada: {stats['distribuidora_real']}")
                 
                 n_inserted = transformer_svc.insert(df, dist_name)
@@ -1016,10 +1036,35 @@ def process_distribuidora(dist_path: Path, dist_name: str, transformer_svc, subs
     # 5️⃣ Atualizar tabela de distribuidoras
     if stats['distribuidora_real']:
         try:
-            distributor_svc.update(stats['distribuidora_real'], 
-                                   stats['transformadores_inseridos'],
-                                   stats['subestacoes_inseridas'],
-                                   dist_name)
+            # Calcular potência total dos transformadores
+            potencia_total = 0
+            total_consumidores = (stats.get('consumidores_bt_inseridos', 0) + 
+                                 stats.get('consumidores_mt_inseridos', 0) + 
+                                 stats.get('consumidores_at_inseridos', 0))
+            
+            try:
+                with engine.begin() as conn:
+                    result = conn.execute(text("""
+                        SELECT COALESCE(SUM(potencia_kva), 0) as total_kva
+                        FROM transformadores_aneel
+                        WHERE distribuidora = :distribuidora
+                    """), {'distribuidora': stats['distribuidora_real']})
+                    row = result.fetchone()
+                    if row:
+                        potencia_total = float(row[0])
+            except Exception as e:
+                logger.warning(f"  ⚠ Erro ao calcular potência total: {e}")
+            
+            # Popular distribuidora com todos os dados
+            distributor_svc.upsert(
+                dist_nome=stats['distribuidora_real'],
+                total_trafo=stats['transformadores_inseridos'],
+                total_sub=stats['subestacoes_inseridas'],
+                total_consumidores=total_consumidores,
+                potencia_total_kva=potencia_total if potencia_total > 0 else None,
+                dist_arquivo=dist_name
+            )
+            logger.info(f"  ✓ Distribuidora '{stats['distribuidora_real']}' populada")
         except Exception as e:
             logger.warning(f"  ⚠ Erro ao atualizar tabela de distribuidoras: {e}")
     
@@ -1071,6 +1116,44 @@ def main():
     for dist_name, dist_path in distribuidoras.items():
         stats = process_distribuidora(dist_path, dist_name, transformer_svc, substation_svc, consumer_svc, distributor_svc, area_svc)
         all_stats.append(stats)
+    
+    # 🔄 Atualizar totais reais das distribuidoras (após processamento completo)
+    logger.info(f"\n  ✅ Atualizando totais reais das distribuidoras...\n")
+    try:
+        with engine.begin() as conn:
+            # Atualizar total_transformadores com dados reais do banco
+            conn.execute(text("""
+                UPDATE distribuidoras_aneel d SET
+                    total_transformadores = COALESCE(
+                        (SELECT COUNT(*) FROM transformadores_aneel t WHERE t.distribuidora = d.nome),
+                        0
+                    )
+                WHERE ativo = TRUE
+            """))
+            
+            # Atualizar total_subestacoes com dados reais do banco
+            conn.execute(text("""
+                UPDATE distribuidoras_aneel d SET
+                    total_subestacoes = COALESCE(
+                        (SELECT COUNT(*) FROM subestacoes_aneel s WHERE s.distribuidora = d.nome),
+                        0
+                    )
+                WHERE ativo = TRUE
+            """))
+            
+            # Atualizar potencia_total_kva com dados reais do banco
+            conn.execute(text("""
+                UPDATE distribuidoras_aneel d SET
+                    potencia_total_kva = COALESCE(
+                        (SELECT SUM(potencia_kva) FROM transformadores_aneel t WHERE t.distribuidora = d.nome),
+                        0
+                    )
+                WHERE ativo = TRUE
+            """))
+            
+            logger.info(f"  ✅ Totais das distribuidoras atualizados com sucesso!")
+    except Exception as e:
+        logger.warning(f"  ⚠ Erro ao atualizar totais: {e}")
     
     # Resumo final
     logger.info(f"\n{'='*70}")

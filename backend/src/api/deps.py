@@ -9,9 +9,11 @@ from sqlalchemy.engine import Engine
 
 from ..core.database import get_engine
 from ..domain.analise import AnaliseRepository
+from ..domain.subsistema import SubsistemaRepository
 from ..infrastructure.persistence.analise import AnaliseRepositorySQLAlchemy
 from ..infrastructure.persistence.realtime_estimation import SQLAlchemyRealTimeEstimationRepository
 from ..infrastructure.persistence.load_calculation import SQLAlchemyLoadCalculationRepository
+from ..infrastructure.persistence.subsistema import SubsistemaRepositorySQLAlchemy
 
 
 def get_db_engine() -> Engine:
@@ -31,6 +33,17 @@ def get_analise_repository(engine: EngineDepends) -> AnaliseRepositorySQLAlchemy
 # Type alias para injeção de repositório Analise
 AnaliseRepoDepends = Annotated[
     AnaliseRepositorySQLAlchemy, Depends(get_analise_repository)
+]
+
+
+def get_subsistema_repository(engine: EngineDepends) -> SubsistemaRepositorySQLAlchemy:
+    """Dependência: Repositório de subsistemas."""
+    return SubsistemaRepositorySQLAlchemy(engine)
+
+
+# Type alias para injeção de repositório Subsistema
+SubsistemaRepoDepends = Annotated[
+    SubsistemaRepositorySQLAlchemy, Depends(get_subsistema_repository)
 ]
 
 

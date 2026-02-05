@@ -445,25 +445,179 @@ class DistributorService:
     def __init__(self, engine):
         self.engine = engine
     
-    def update(self, dist_real: str, total_trafo: int, total_sub: int, dist_arquivo: str):
+    def upsert(self, dist_nome: str, total_trafo: int = 0, total_sub: int = 0, 
+               total_consumidores: int = 0, potencia_total_kva: float = None, 
+               dist_arquivo: str = None) -> bool:
         """
-        Atualiza tabela de distribuidoras
+        Insere ou atualiza uma distribuidora na tabela distribuidoras_aneel
         
-        NOTA: Schema é gerenciado em infrastructure/database/schema.sql (unificado)
-        Usa a stored procedure sp_atualizar_distribuidoras() se disponível
+        Args:
+            dist_nome: Nome da distribuidora (ex: "IENERGIA_87_2021-02-28_M10_20210902-1755")
+            total_trafo: Total de transformadores
+            total_sub: Total de subestações
+            total_consumidores: Total de consumidores
+            potencia_total_kva: Potência total em kVA
+            dist_arquivo: Nome do arquivo original
+            
+        Returns:
+            True se inserido/atualizado, False se erro
         """
         try:
             with self.engine.begin() as conn:
-                # Tentar usar stored procedure (se disponível no schema)
-                try:
-                    conn.execute(text("SELECT sp_atualizar_distribuidoras()"))
-                    logger.info(f"✓ Distribuídoras atualizadas via sp_atualizar_distribuidoras()")
-                except:
-                    # Fallback: atualizar diretamente (sem CREATE TABLE - schema já existe)
-                    logger.info(f"✓ Distribuídora atualizada: {dist_real}")
+                # Extrair estado e região do nome da distribuidora (se possível)
+                estado, regiao = self._extrair_estado_regiao(dist_nome)
+                
+                codigo_arquivo = dist_arquivo or dist_nome
+                
+                # Primeiro tentar UPDATE
+                update_query = text("""
+                    UPDATE distribuidoras_aneel
+                    SET total_transformadores = :total_trafo,
+                        total_subestacoes = :total_sub,
+                        total_consumidores = :total_consumidores,
+                        potencia_total_kva = :potencia_total_kva,
+                        data_carregamento = NOW()
+                    WHERE nome = :nome
+                """)
+                
+                result = conn.execute(update_query, {
+                    'nome': dist_nome,
+                    'total_trafo': total_trafo,
+                    'total_sub': total_sub,
+                    'total_consumidores': total_consumidores,
+                    'potencia_total_kva': potencia_total_kva,
+                })
+                
+                # Se nenhum registro foi atualizado, fazer INSERT
+                if result.rowcount == 0:
+                    insert_query = text("""
+                        INSERT INTO distribuidoras_aneel 
+                        (nome, codigo_arquivo, estado, regiao, data_carregamento, 
+                         total_transformadores, total_subestacoes, total_consumidores, 
+                         potencia_total_kva, ativo, observacoes)
+                        VALUES (:nome, :codigo_arquivo, :estado, :regiao, NOW(),
+                                :total_trafo, :total_sub, :total_consumidores,
+                                :potencia_total_kva, TRUE, :observacoes)
+                    """)
+                    
+                    conn.execute(insert_query, {
+                        'nome': dist_nome,
+                        'codigo_arquivo': codigo_arquivo,
+                        'estado': estado,
+                        'regiao': regiao,
+                        'total_trafo': total_trafo,
+                        'total_sub': total_sub,
+                        'total_consumidores': total_consumidores,
+                        'potencia_total_kva': potencia_total_kva,
+                        'observacoes': f'Inserido em {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+                    })
+                    logger.info(f"✓ Distribuidora '{dist_nome}' INSERIDA com sucesso "
+                               f"(Trafo: {total_trafo}, Sub: {total_sub}, Consumidores: {total_consumidores})")
+                else:
+                    logger.info(f"✓ Distribuidora '{dist_nome}' ATUALIZADA com sucesso "
+                               f"(Trafo: {total_trafo}, Sub: {total_sub}, Consumidores: {total_consumidores})")
+                
+                return True
         
         except Exception as e:
-            logger.error(f"Erro ao atualizar distribuidora: {e}")
+            logger.error(f"❌ Erro ao popular distribuidora '{dist_nome}': {e}")
+            return False
+    
+    def update(self, dist_real: str, total_trafo: int, total_sub: int, dist_arquivo: str):
+        """
+        Atualiza tabela de distribuidoras (compatibilidade com código legado)
+        
+        Args:
+            dist_real: Nome real da distribuidora
+            total_trafo: Total de transformadores carregados
+            total_sub: Total de subestações carregadas
+            dist_arquivo: Nome do arquivo/pasta original
+        """
+        self.upsert(
+            dist_nome=dist_real,
+            total_trafo=total_trafo,
+            total_sub=total_sub,
+            dist_arquivo=dist_arquivo
+        )
+    
+    def _extrair_estado_regiao(self, dist_nome: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Extrai estado e região do nome da distribuidora
+        
+        Exemplos de padrões:
+        - "IENERGIA_87_2021-02-28_M10_20210902-1755"
+        - "COPEL"
+        - "CELESC"
+        
+        Returns:
+            (estado, regiao) - Ambos None se não conseguir identificar
+        """
+        # Dicionário de distribuidoras conhecidas -> (estado, região)
+        distribuidoras_mapa = {
+            'copel': ('PR', 'Sul'),
+            'celesc': ('SC', 'Sul'),
+            'ienergia': ('SC', 'Sul'),  # IENERGIA opera em SC
+            'eletrobras': ('Nacional', 'Sudeste'),
+            'eletrosul': ('SC', 'Sul'),
+            'ceee': ('RS', 'Sul'),
+            'cemig': ('MG', 'Sudeste'),
+            'eletropaulo': ('SP', 'Sudeste'),
+            'enel': ('SP', 'Sudeste'),
+            'enersul': ('MS', 'Centro-Oeste'),
+            'equatorial': ('Nacional', 'Norte'),
+            'light': ('RJ', 'Sudeste'),
+            'neoenergia': ('Nacional', 'Nordeste'),
+            'cpfl': ('SP', 'Sudeste'),
+        }
+        
+        # Extrair primeira parte do nome antes de underscores ou números
+        nome_lower = dist_nome.lower().split('_')[0]
+        
+        # Procurar no mapa
+        for chave, (estado, regiao) in distribuidoras_mapa.items():
+            if chave in nome_lower:
+                return estado, regiao
+        
+        # Se não encontrar, retornar None
+        return None, None
+    
+    def listar_todas(self) -> pd.DataFrame:
+        """Lista todas as distribuidoras cadastradas"""
+        try:
+            query = "SELECT * FROM distribuidoras_aneel ORDER BY nome"
+            df = pd.read_sql(query, self.engine)
+            logger.info(f"✓ {len(df)} distribuidoras listadas")
+            return df
+        except Exception as e:
+            logger.error(f"❌ Erro ao listar distribuidoras: {e}")
+            return pd.DataFrame()
+    
+    def obter_stats(self, dist_nome: str = None) -> pd.DataFrame:
+        """Obtém estatísticas de distribuidoras"""
+        try:
+            if dist_nome:
+                query = text("""
+                    SELECT nome, total_transformadores, total_subestacoes, 
+                           total_consumidores, potencia_total_kva, data_carregamento
+                    FROM distribuidoras_aneel
+                    WHERE nome ILIKE :nome
+                    ORDER BY data_carregamento DESC
+                """)
+                df = pd.read_sql(query, self.engine, params={'nome': f"%{dist_nome}%"})
+            else:
+                query = """
+                    SELECT nome, total_transformadores, total_subestacoes,
+                           total_consumidores, potencia_total_kva, data_carregamento
+                    FROM distribuidoras_aneel
+                    ORDER BY nome
+                """
+                df = pd.read_sql(query, self.engine)
+            
+            logger.info(f"✓ Estatísticas obtidas para {len(df)} distribuidora(s)")
+            return df
+        except Exception as e:
+            logger.error(f"❌ Erro ao obter estatísticas: {e}")
+            return pd.DataFrame()
 
 
 class AreaService:
