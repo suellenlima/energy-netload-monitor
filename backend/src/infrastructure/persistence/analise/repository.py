@@ -60,6 +60,36 @@ class AnaliseRepositorySQLAlchemy(AnaliseRepository):
         except Exception:
             return []
 
+    def obter_carga_atual_distribuidora(self, distribuidora: str) -> dict:
+        """Obtém última carga ONS da distribuidora."""
+        try:
+            with self.engine.connect() as conn:
+                query = text("""
+                    SELECT 
+                        MAX(co.carga_ons) as carga_ons,
+                        MAX(co.estimativa_solar_mw) as geracao_mmgd,
+                        MAX(co.carga_real_estimada) as consumo_estimado,
+                        MAX(co.data_criacao) as data_criacao
+                    FROM carga_oculta co
+                    WHERE co.distribuidora = :distribuidora
+                    ORDER BY co.data_criacao DESC
+                    LIMIT 1
+                """)
+                result = conn.execute(query, {"distribuidora": distribuidora})
+                row = result.fetchone()
+                
+                if row:
+                    return {
+                        "carga_ons": float(row[0]) if row[0] else 0,
+                        "geracao_mmgd": float(row[1]) if row[1] else 0,
+                        "consumo_estimado": float(row[2]) if row[2] else 0,
+                        "data_criacao": row[3],
+                        "irradiancia": 0  # TODO: integrar com API meteorológica
+                    }
+                return None
+        except Exception:
+            return None
+
     def obter_classes_consumo(
         self, distribuidora: Optional[str] = None
     ) -> list[dict]:

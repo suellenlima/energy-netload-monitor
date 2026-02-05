@@ -78,12 +78,17 @@ def render_executive_kpis(
     _apply_kpi_card_style()
 
     try:
-        # Buscar dados de tempo real
-        params = {"subsistema": subsistema}
+        # Buscar dados de tempo real - versão simplificada para distribuidora
         if distribuidora:
-            params["distribuidora"] = distribuidora
-
-        response = client.get("/analise/estado-atual", params=params)
+            # Use endpoint específico para distribuidora
+            response = client.get(
+                "/analise/carga-atual-distribuidora",
+                params={"distribuidora": distribuidora}
+            )
+        else:
+            # Use endpoint geral por subsistema
+            params = {"subsistema": subsistema}
+            response = client.get("/analise/estado-atual", params=params)
 
         # Verificar erro primeiro
         if response.error:
@@ -99,22 +104,73 @@ def render_executive_kpis(
                 st.metric("Status", "Erro", help="Falha ao carregar dados")
             return {}
 
-        # Verificar se há dados e se contém estimativas
-        if response.data and "estimativas" in response.data:
-            estimativas = response.data["estimativas"]
-            hora_atual = response.data.get("hora_atual", "--")
+        # Verificar se há dados
+        if not response.data:
+            st.warning("Sem dados disponíveis para os KPIs")
+            return {}
 
-            # Extrair valores
-            carga_ons = estimativas.get("carga_ons_mw", 0)
-            consumo_estimado = estimativas.get("consumo_estimado_mw", 0)
-            geracao_mmgd = estimativas.get("geracao_mmgd_mw", 0)
-            irradiancia = estimativas.get("irradiancia_atual_wm2", 0)
+        # Suportar ambos os formatos
+        if isinstance(response.data, dict):
+            # Formato do novo endpoint carga-atual-distribuidora
+            if "carga_ons_mw" in response.data:
+                hora_atual = "--"
+                carga_ons = response.data.get("carga_ons_mw", 0)
+                consumo_estimado = 0  # Não disponível neste endpoint
+                geracao_mmgd = 0  # Não disponível neste endpoint
+                irradiancia = 0  # Não disponível neste endpoint
+            # Formato do endpoint estado-atual
+            elif "estimativas" in response.data:
+                estimativas = response.data["estimativas"]
+                hora_atual = response.data.get("hora_atual", "--")
+                carga_ons = estimativas.get("carga_ons_mw", 0)
+                consumo_estimado = estimativas.get("consumo_estimado_mw", 0)
+                geracao_mmgd = estimativas.get("geracao_mmgd_mw", 0)
+                irradiancia = estimativas.get("irradiancia_atual_wm2", 0)
+            else:
+                # Formato desconhecido
+                st.warning("Formato de resposta não reconhecido")
+                return {}
 
             # Calcular status do sistema
             if geracao_mmgd > 0:
                 percentual_mmgd = (geracao_mmgd / consumo_estimado * 100) if consumo_estimado > 0 else 0
             else:
                 percentual_mmgd = 0
+
+            # Buscar carga do dia anterior para comparação
+            carga_anterior = 0
+            delta_carga = 0
+            try:
+                from datetime import datetime, timedelta
+                
+                # Se for endpoint de distribuidora com data_medicao
+                if distribuidora and "data_medicao" in response.data:
+                    data_atual = pd.to_datetime(response.data.get("data_medicao"))
+                    
+                    # Buscar dados históricos para comparação
+                    response_historico = client.get(
+                        "/analise/carga-oculta",
+                        params={"distribuidora": distribuidora}
+                    )
+                    
+                    if response_historico.data and len(response_historico.data) > 0:
+                        df_hist = pd.DataFrame(response_historico.data)
+                        if not df_hist.empty and "hora" in df_hist.columns:
+                            df_hist["hora"] = pd.to_datetime(df_hist["hora"])
+                            
+                            # Filtrar para 24h atrás
+                            data_anterior = data_atual - timedelta(days=1)
+                            df_anterior = df_hist[
+                                (df_hist["hora"] >= data_anterior) & 
+                                (df_hist["hora"] < data_atual)
+                            ]
+                            
+                            if not df_anterior.empty:
+                                carga_anterior = df_anterior["carga_ons"].mean()
+                                delta_carga = carga_ons - carga_anterior
+            except Exception as e:
+                logger.debug(f"Não foi possível calcular delta: {e}")
+                delta_carga = None
 
             # Determinar status
             if percentual_mmgd >= 25:
@@ -131,10 +187,16 @@ def render_executive_kpis(
             col1, col2, col3, col4 = st.columns(4)
 
             with col1:
+                # Formatar delta da carga
+                if delta_carga is not None and delta_carga != 0:
+                    delta_text = f"{delta_carga:+.1f} MW vs ontem"
+                else:
+                    delta_text = "Tempo real diário"
+                
                 st.metric(
                     label="Carga Atual (ONS)",
                     value=f"{carga_ons:,.1f} MW",
-                    delta=f"Hora {hora_atual}h",
+                    delta=delta_text,
                     help="Carga líquida medida pelo ONS nos pontos de entrega"
                 )
 
