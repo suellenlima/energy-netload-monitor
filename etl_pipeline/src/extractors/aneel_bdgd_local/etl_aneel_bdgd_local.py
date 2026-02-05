@@ -732,7 +732,7 @@ def load_transformadores(df: pd.DataFrame, distribuidora: str, transformer_svc: 
         return 0
     
     try:
-        # Schema é gerenciado no banco (veja infrastructure/database/schema_aneel_bdgd.sql)
+        # Schema é gerenciado no banco (veja infrastructure/database/schema.sql (unificado))
         # Service apenas insere dados
         inseridos = transformer_svc.insert(df, distribuidora)
         logger.info(f"    ✓ {inseridos} transformadores carregados")
@@ -756,7 +756,7 @@ def load_subestacoes(df: pd.DataFrame, distribuidora: str, substation_svc: Subst
         return 0
     
     try:
-        # Schema é gerenciado no banco (veja infrastructure/database/schema_aneel_bdgd.sql)
+        # Schema é gerenciado no banco (veja infrastructure/database/schema.sql (unificado))
         # Service apenas insere dados
         inseridos = substation_svc.insert(df, distribuidora)
         logger.info(f"    ✓ {inseridos} subestações carregadas")
@@ -1097,3 +1097,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

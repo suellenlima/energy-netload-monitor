@@ -175,7 +175,7 @@ class TransformerService:
         """
         Insere transformadores no banco
         
-        NOTA: Schema é gerenciado em infrastructure/database/schema_aneel_bdgd.sql
+        NOTA: Schema é gerenciado em infrastructure/database/schema.sql (unificado)
         Este método APENAS insere dados, não cria/altera tabelas
         """
         if df.empty:
@@ -236,7 +236,7 @@ class SubstationService:
         """
         Insere subestações no banco
         
-        NOTA: Schema é gerenciado em infrastructure/database/schema_aneel_bdgd.sql
+        NOTA: Schema é gerenciado em infrastructure/database/schema.sql (unificado)
         Este método APENAS insere dados, não cria/altera tabelas
         """
         if df.empty:
@@ -379,7 +379,7 @@ class ConsumerService:
         """
         Insere consumidores BT
         
-        NOTA: Schema é gerenciado em infrastructure/database/schema_aneel_bdgd.sql
+        NOTA: Schema é gerenciado em infrastructure/database/schema.sql (unificado)
         Este método APENAS insere dados, não cria/altera tabelas
         """
         if df.empty:
@@ -400,7 +400,7 @@ class ConsumerService:
         """
         Insere consumidores MT
         
-        NOTA: Schema é gerenciado em infrastructure/database/schema_aneel_bdgd.sql
+        NOTA: Schema é gerenciado em infrastructure/database/schema.sql (unificado)
         Este método APENAS insere dados, não cria/altera tabelas
         """
         if df.empty:
@@ -421,7 +421,7 @@ class ConsumerService:
         """
         Insere consumidores AT
         
-        NOTA: Schema é gerenciado em infrastructure/database/schema_aneel_bdgd.sql
+        NOTA: Schema é gerenciado em infrastructure/database/schema.sql (unificado)
         Este método APENAS insere dados, não cria/altera tabelas
         """
         if df.empty:
@@ -449,7 +449,7 @@ class DistributorService:
         """
         Atualiza tabela de distribuidoras
         
-        NOTA: Schema é gerenciado em infrastructure/database/schema_aneel_bdgd.sql
+        NOTA: Schema é gerenciado em infrastructure/database/schema.sql (unificado)
         Usa a stored procedure sp_atualizar_distribuidoras() se disponível
         """
         try:
@@ -476,7 +476,7 @@ class AreaService:
         """
         Calcula áreas poligonais dos transformadores via stored procedure
         
-        NOTA: Schema é gerenciado em infrastructure/database/schema_aneel_bdgd.sql
+        NOTA: Schema é gerenciado em infrastructure/database/schema.sql (unificado)
         Usa a stored procedure sp_calcular_area_transformadores() que implementa:
         - ≥3 consumidores → ConvexHull
         - <3 consumidores → Buffer (raio adaptado: BT=500m, MT=1km, AT=2km)
@@ -502,5 +502,6 @@ class AreaService:
         
         except Exception as e:
             logger.warning(f"⚠ sp_calcular_area_transformadores() não disponível: {e}")
-            logger.warning(f"  Execute primeiro: bash infrastructure/database/init_schema_aneel_bdgd.sh")
+            logger.warning(f"  Execute primeiro: docker-compose up db (schema carregado automaticamente)")
             return 0, 0
+

@@ -36,9 +36,20 @@ from ..schemas import (
     RegistrarImagemRequest,
     RegistrarImagemResponse,
 )
-from ..services.satelite_service import SateliteService
-from ..services.google_maps_service import GoogleMapsService
-from ..services.inpe_service import CBERSService
+from ..application.satelite import (
+    ObtenerCoordenadasTransformadorUseCase,
+    ObtenerAreaCoberturaTelhadoUseCase,
+    ListarImagensHistoricoTransformadorUseCase,
+    DecidirFonteSateliteUseCase,
+    ObtenerQuotaMesAtualUseCase,
+    ObtenerEstatisticasGoogleMapsUseCase,
+)
+from ..infrastructure.persistence.satelite import SateliteRepositorySQLAlchemy
+from ..domain.satelite import (
+    TransformadorNotFoundError,
+    CoordenadasInvalidasError,
+    FonteNaoDisponibleError,
+)
 from .deps import EngineDepends, LimiteQuery
 
 logger = logging.getLogger(__name__)
@@ -133,9 +144,9 @@ class EstatisticasGoogleMapsResponse(BaseModel):
 # DEPENDÊNCIAS
 # ========================================================================
 
-def get_satelite_service(engine: EngineDepends) -> SateliteService:
-    """Dependência para obter serviço de satélite."""
-    return SateliteService(engine)
+def get_repository(engine: EngineDepends) -> SateliteRepositorySQLAlchemy:
+    """Dependência para obter repository de satélite."""
+    return SateliteRepositorySQLAlchemy(engine)
 
 
 # ========================================================================
@@ -149,7 +160,7 @@ def get_satelite_service(engine: EngineDepends) -> SateliteService:
 )
 async def obter_coordenadas_transformador(
     transformador_id: int = Path(..., gt=0, description="ID do transformador"),
-    service: SateliteService = Depends(get_satelite_service)
+    repository = Depends(get_repository)
 ):
     """
     Obtém coordenadas de um transformador validadas para busca de satélite.
@@ -183,10 +194,15 @@ async def obter_coordenadas_transformador(
     ```
     """
     try:
-        coordenadas = service.obter_coordenadas_transformador(transformador_id)
-        return CoordenadaTelhadoResponse(**coordenadas)
+        use_case = ObtenerCoordenadasTransformadorUseCase(repository=repository)
+        resultado = use_case.executar(transformador_id)
+        return CoordenadaTelhadoResponse(**resultado['dados'])
     
-    except ValueError as e:
+    except TransformadorNotFoundError as e:
+        logger.error(f"❌ Transformador não encontrado: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+    
+    except CoordenadasInvalidasError as e:
         logger.error(f"❌ Erro de validação: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     
@@ -202,7 +218,7 @@ async def obter_coordenadas_transformador(
 )
 async def obter_area_cobertura_transformador(
     transformador_id: int = Path(..., gt=0, description="ID do transformador"),
-    service: SateliteService = Depends(get_satelite_service)
+    repository = Depends(get_repository)
 ):
     """
     Obtém a área de cobertura (polígono) de um transformador.
@@ -238,12 +254,17 @@ async def obter_area_cobertura_transformador(
     ```
     """
     try:
-        area = service.obter_area_cobertura_transformador(transformador_id)
+        use_case = ObtenerAreaCoberturaTelhadoUseCase(repository=repository)
+        resultado = use_case.executar(transformador_id)
         
-        if not area:
+        if resultado['dados'] is None:
             return None
         
-        return AreaCoberturaTelhadoResponse(**area)
+        return AreaCoberturaTelhadoResponse(**resultado['dados'])
+    
+    except TransformadorNotFoundError as e:
+        logger.error(f"❌ Transformador não encontrado: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
     
     except Exception as e:
         logger.error(f"❌ Erro ao obter área de cobertura: {e}")
@@ -257,7 +278,7 @@ async def obter_area_cobertura_transformador(
 )
 async def listar_imagens_historico_transformador(
     transformador_id: int = Path(..., gt=0, description="ID do transformador"),
-    service: SateliteService = Depends(get_satelite_service),
+    repository = Depends(get_repository),
     limit: int = Query(50, ge=1, le=100, description="Máximo de registros"),
     offset: int = Query(0, ge=0, description="Deslocamento para paginação"),
     apenas_sucesso: bool = Query(True, description="Retornar apenas bem-sucedidas")
@@ -309,7 +330,8 @@ async def listar_imagens_historico_transformador(
     ```
     """
     try:
-        resultado = service.obter_historico_transformador(
+        use_case = ListarImagensHistoricoTransformadorUseCase(repository=repository)
+        resultado = use_case.executar(
             transformador_id=transformador_id,
             limite=limit,
             offset=offset,
@@ -318,9 +340,13 @@ async def listar_imagens_historico_transformador(
         
         return ListarImagensTransformadorResponse(
             transformador_id=transformador_id,
-            total_requisicoes=resultado['total_registros'],
-            registros=[HistoricoRequisicaoResponse(**r) for r in resultado['registros']]
+            total_requisicoes=resultado['dados']['total_requisicoes'],
+            registros=[HistoricoRequisicaoResponse(**r) for r in resultado['dados']['registros']]
         )
+    
+    except TransformadorNotFoundError as e:
+        logger.error(f"❌ Transformador não encontrado: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
     
     except Exception as e:
         logger.error(f"❌ Erro ao listar histórico: {e}")
@@ -338,7 +364,7 @@ async def listar_imagens_historico_transformador(
 )
 async def decidir_fonte_satelite(
     transformador_id: int = Path(..., gt=0, description="ID do transformador"),
-    service: SateliteService = Depends(get_satelite_service),
+    repository = Depends(get_repository),
     tentar_google_maps: bool = Query(True, description="Tentar Google Maps"),
     tentar_cbers4a: bool = Query(True, description="Tentar CBERS-4A como fallback"),
     force_cbers4a: bool = Query(False, description="Forçar CBERS-4A (ignora Google)")
@@ -399,23 +425,33 @@ async def decidir_fonte_satelite(
     ```
     """
     try:
-        decisao = service.decidir_fonte_satelite(
+        use_case = DecidirFonteSateliteUseCase(repository=repository)
+        resultado = use_case.executar(
             transformador_id=transformador_id,
             tentar_google_maps=tentar_google_maps,
             tentar_cbers4a=tentar_cbers4a,
             force_cbers4a=force_cbers4a
         )
         
-        if not decisao.get('pode_usar'):
+        if not resultado['sucesso']:
             raise HTTPException(
                 status_code=400,
-                detail=decisao.get('razao', 'Nenhuma fonte disponível')
+                detail=resultado['dados'].get('razao', 'Nenhuma fonte disponível')
             )
         
-        return FonteDecisaoResponse(**decisao)
+        return FonteDecisaoResponse(**resultado['dados'])
+    
+    except TransformadorNotFoundError as e:
+        logger.error(f"❌ Transformador não encontrado: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+    
+    except FonteNaoDisponibleError as e:
+        logger.error(f"❌ Fonte não disponível: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     
     except HTTPException:
         raise
+    
     except Exception as e:
         logger.error(f"❌ Erro ao decidir fonte: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -431,7 +467,7 @@ async def decidir_fonte_satelite(
     summary="Quota de requisições do Google Maps no mês atual"
 )
 async def obter_quota_mes_atual(
-    service: SateliteService = Depends(get_satelite_service)
+    repository = Depends(get_repository)
 ):
     """
     Obtém quota de requisições do Google Maps para o mês atual.
@@ -462,8 +498,9 @@ async def obter_quota_mes_atual(
     ```
     """
     try:
-        quota = service.obter_quota_mes_atual()
-        return QuotaGoogleMapsResponse(**quota)
+        use_case = ObtenerQuotaMesAtualUseCase(repository=repository)
+        resultado = use_case.executar()
+        return QuotaGoogleMapsResponse(**resultado['dados'])
     
     except Exception as e:
         logger.error(f"❌ Erro ao obter quota: {e}")
@@ -476,7 +513,7 @@ async def obter_quota_mes_atual(
     summary="Estatísticas gerais de uso do Google Maps"
 )
 async def obter_estatisticas_google_maps(
-    service: SateliteService = Depends(get_satelite_service)
+    repository = Depends(get_repository)
 ):
     """
     Obtém estatísticas gerais de uso do Google Maps (histórico completo).
@@ -505,8 +542,9 @@ async def obter_estatisticas_google_maps(
     ```
     """
     try:
-        stats = service.obter_estatisticas_google_maps()
-        return EstatisticasGoogleMapsResponse(**stats)
+        use_case = ObtenerEstatisticasGoogleMapsUseCase(repository=repository)
+        resultado = use_case.executar()
+        return EstatisticasGoogleMapsResponse(**resultado['dados'])
     
     except Exception as e:
         logger.error(f"❌ Erro ao obter estatísticas: {e}")

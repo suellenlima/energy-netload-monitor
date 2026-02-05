@@ -35,7 +35,7 @@ def get_lista_distribuidoras(
     - **subsistema**: Filtrar por subsistema (SUDESTE, NORTE, NORDESTE, SUL) - opcional
     """
     try:
-        return repo.get_distribuidoras(subsistema.value if subsistema else None)
+        return repo.obter_distribuidoras(subsistema.value if subsistema else None)
     except Exception as exc:
         logger.error(f"Erro ao listar distribuidoras: {exc}", exc_info=True)
         raise DatabaseError("Falha ao listar distribuidoras") from exc
