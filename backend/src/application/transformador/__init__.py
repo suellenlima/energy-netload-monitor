@@ -17,6 +17,7 @@ from .use_cases import (
     ObtenerAreaCoberturaUseCase,
     ObtenerTransformadorUseCase,
 )
+from .pipeline_service import TransformadorPipelineApplicationService
 
 __all__ = [
     "ObtenerTransformadorUseCase",
@@ -34,4 +35,5 @@ __all__ = [
     "ListarConsumidoresMTUseCase",
     "ListarConsumidoresATUseCase",
     "ExportarTransformadoresUseCase",
+    "TransformadorPipelineApplicationService",
 ]
