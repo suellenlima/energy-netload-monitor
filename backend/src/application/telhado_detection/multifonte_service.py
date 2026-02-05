@@ -1,41 +1,56 @@
 """
-Service para Telhados Multi-Fonte
-Responsável por: Orquestração de detecção com múltiplas fontes, lógica de fallback
+Application layer for multi-source roof detection service
 
-Reutiliza:
-  - TelhadoMultiFonteRepository: Acesso ao banco de dados
-  - GoogleMapsQuotaService: Gestão de quota do Google Maps
-  - TelhadoSegmentationService: Detecção de telhados em imagens
-  - ImagemSalvamentoService: Armazenamento de imagens
-
-Author: Energy Netload Monitor
-Date: 2026-02-04
+Extends TelhadoDetectionService with fallback strategies:
+1. Try Google Maps (priority - high resolution)
+2. Fallback to CBERS-4A (free - lower resolution)
+3. Aggregates results from multiple sources
 """
 
 import logging
-import os
 import time
+import os
 from typing import Dict, Optional, List, Any
 
-from ..infrastructure.persistence.telhado_multifonte import TelhadoMultiFonteRepository
+from ...domain.telhado import Telhado
+from ...infrastructure.persistence.telhado_multifonte import TelhadoMultiFonteRepository
+from .service import TelhadoDetectionService
 
 
-class TelhadoMultiFonteService:
+logger = logging.getLogger(__name__)
+
+
+class TelhadoMultiFonteApplicationService:
     """
-    Service para detecção de telhados com múltiplas fontes.
-    Responsável por: Orquestração, lógica de fallback, agregação.
+    Application service for multi-source roof detection with fallback strategy.
+    
+    Orchestrates:
+    - Detection with multiple image sources
+    - Fallback logic when primary source fails
+    - Result aggregation and persistence
     """
-
+    
     def __init__(self, engine):
-        """Inicializa service com engine SQLAlchemy."""
+        """
+        Initialize multi-source detection service
+        
+        Args:
+            engine: SQLAlchemy engine for database access
+        """
         self.engine = engine
         self.repository = TelhadoMultiFonteRepository(engine)
         self.logger = logging.getLogger(__name__)
-
-    # ========================================================================
-    # FLUXO PRINCIPAL: DETECTAR COM MÚLTIPLAS FONTES
-    # ========================================================================
-
+        
+        # Lazy-loaded services
+        self._servico_telhados: Optional[TelhadoDetectionService] = None
+    
+    def _obter_servico_telhados(self) -> TelhadoDetectionService:
+        """Get or create roof detection service instance (DDD)"""
+        if self._servico_telhados is None:
+            self.logger.info("🔧 Inicializando serviço DDD de detecção de telhados...")
+            self._servico_telhados = TelhadoDetectionService(engine=self.engine, use_gpu=True)
+        return self._servico_telhados
+    
     def detectar_telhados_multifonte(
         self,
         transformador_id: int,
@@ -46,24 +61,24 @@ class TelhadoMultiFonteService:
         salvar_rois: bool = False
     ) -> Dict[str, Any]:
         """
-        Detecta telhados usando múltiplas fontes com estratégia de fallback.
+        Detect roofs using multiple sources with fallback strategy.
         
-        Fluxo:
-        1. Valida entrada e recupera coordenadas do transformador
-        2. Tenta Google Maps (prioritário, melhor resolução)
-        3. Se não encontrar, tenta CBERS-4A (fallback, gratuito)
-        4. Salva telhados detectados e registra processamento
+        Flow:
+        1. Validate input and retrieve transformer coordinates
+        2. Try Google Maps (priority, best resolution)
+        3. If not found, try CBERS-4A (fallback, free)
+        4. Save detected roofs and record processing
         
         Args:
-            transformador_id: ID do transformador
-            subestacao_id: ID da subestação
-            confianca_minima: Score mínimo aceitável (0-1)
-            tentar_google_maps_primeiro: Se deve tentar Google Maps
-            tentar_cbers4a_fallback: Se deve usar CBERS-4A como fallback
-            salvar_rois: Se deve salvar ROIs em disco
+            transformador_id: Transformer ID
+            subestacao_id: Substation ID
+            confianca_minima: Minimum confidence score (0-1)
+            tentar_google_maps_primeiro: Try Google Maps first
+            tentar_cbers4a_fallback: Use CBERS-4A as fallback
+            salvar_rois: Save ROIs to disk
         
         Returns:
-            Dict com resultado da detecção
+            Dict with detection result
         """
         try:
             self.logger.info(
@@ -73,16 +88,16 @@ class TelhadoMultiFonteService:
             )
             
             # ================================================================
-            # 1. VALIDAR ENTRADA E RECUPERAR DADOS
+            # 1. VALIDATE INPUT AND RETRIEVE DATA
             # ================================================================
             
             self.logger.info("[1/4] Recuperando dados do transformador...")
             
-            # Validações
+            # Validate confidence
             if confianca_minima < 0 or confianca_minima > 1:
                 raise ValueError("Confiança deve estar entre 0 e 1")
             
-            # Recuperar transformador
+            # Retrieve transformer
             transformador = self.repository.obter_transformador(transformador_id)
             if not transformador:
                 raise ValueError(f"Transformador {transformador_id} não encontrado")
@@ -97,7 +112,7 @@ class TelhadoMultiFonteService:
                 f"✓ Transformador encontrado: {transformador['nome']} ({lat}, {lon})"
             )
             
-            # Recuperar subestação
+            # Retrieve substation
             subestacao = self.repository.obter_subestacao(subestacao_id)
             if not subestacao:
                 raise ValueError(f"Subestação {subestacao_id} não encontrada")
@@ -105,7 +120,7 @@ class TelhadoMultiFonteService:
             self.logger.info(f"✓ Subestação encontrada: {subestacao['nome']}")
             
             # ================================================================
-            # 2. GERAR URLs DE IMAGENS
+            # 2. GENERATE IMAGE URLs FOR MULTIPLE SOURCES
             # ================================================================
             
             self.logger.info("[2/4] Gerando URLs de imagens...")
@@ -117,7 +132,7 @@ class TelhadoMultiFonteService:
             self.logger.info(f"✓ URLs geradas: {list(urls_por_fonte.keys())}")
             
             # ================================================================
-            # 3. TENTAR DETECÇÃO COM FALLBACK
+            # 3. TRY DETECTION WITH FALLBACK
             # ================================================================
             
             self.logger.info("[3/4] Tentando detectar telhados...")
@@ -127,7 +142,7 @@ class TelhadoMultiFonteService:
             url_utilizada = None
             detalhes_tentativas = {}
             
-            # Tentar Google Maps primeiro
+            # Try Google Maps first
             if tentar_google_maps_primeiro and 'google_maps' in urls_por_fonte:
                 self.logger.info("\n🔍 Tentativa 1: Google Maps...")
                 
@@ -149,7 +164,7 @@ class TelhadoMultiFonteService:
                 else:
                     self.logger.info("⚠️  Nenhum telhado detectado em Google Maps")
             
-            # Fallback para CBERS-4A
+            # Fallback to CBERS-4A
             if (not fonte_utilizada and tentar_cbers4a_fallback and 
                 'cbers4a' in urls_por_fonte):
                 
@@ -171,7 +186,7 @@ class TelhadoMultiFonteService:
                     url_utilizada = resultado_cbers['url_principal']
             
             # ================================================================
-            # 4. SALVAR RESULTADOS
+            # 4. SAVE RESULTS
             # ================================================================
             
             self.logger.info("[4/4] Salvando resultados...")
@@ -179,7 +194,7 @@ class TelhadoMultiFonteService:
             telhados_salvos = []
             
             if resultado_deteccao and resultado_deteccao.get('telhados'):
-                # Salvar telhados detectados
+                # Save detected roofs
                 telhados_ids = self.repository.salvar_telhados_detectados(
                     transformador_id=transformador_id,
                     subestacao_id=subestacao_id,
@@ -190,7 +205,7 @@ class TelhadoMultiFonteService:
                 telhados_salvos = telhados_ids
                 self.logger.info(f"✓ {len(telhados_salvos)} telhados salvos no banco")
             
-            # Registrar processamento
+            # Record processing
             mensagem = (
                 f"Detectados {len(telhados_salvos)} telhados com {fonte_utilizada or 'nenhuma'}"
                 if telhados_salvos 
@@ -229,11 +244,7 @@ class TelhadoMultiFonteService:
         except Exception as e:
             self.logger.error(f"Erro crítico na detecção multi-fonte: {e}", exc_info=True)
             raise
-
-    # ========================================================================
-    # GERAR URLs PARA MÚLTIPLAS FONTES
-    # ========================================================================
-
+    
     def _gerar_urls_multifonte(
         self,
         transformador_id: int,
@@ -242,13 +253,13 @@ class TelhadoMultiFonteService:
         subestacao_id: int
     ) -> Dict[str, Dict[str, Any]]:
         """
-        Gera URLs de imagens para múltiplas fontes.
+        Generate image URLs for multiple sources.
         
         Returns:
-            Dict com URLs por fonte
+            Dict with URLs by source
         """
         try:
-            from ..services.image_service import ImagemMultiFonteService
+            from .image_service import ImagemMultiFonteService
             
             google_maps_api_key = os.getenv('GOOGLE_MAPS_API_KEY')
             service_multifonte = ImagemMultiFonteService(google_maps_api_key)
@@ -257,7 +268,7 @@ class TelhadoMultiFonteService:
                 transformador_id=transformador_id,
                 latitude=latitude,
                 longitude=longitude,
-                vertices_poligono=[]  # Sem vértices (tabela não existe no novo schema)
+                vertices_poligono=[]
             )
             
             return urls
@@ -265,11 +276,7 @@ class TelhadoMultiFonteService:
         except Exception as e:
             self.logger.warning(f"Erro ao gerar URLs multi-fonte: {e}")
             return {}
-
-    # ========================================================================
-    # TENTAR GOOGLE MAPS
-    # ========================================================================
-
+    
     def _tentar_google_maps(
         self,
         url: str,
@@ -279,23 +286,23 @@ class TelhadoMultiFonteService:
         distribuidora: str
     ) -> Dict[str, Any]:
         """
-        Tenta detectar telhados em imagem Google Maps.
+        Try to detect roofs in Google Maps image.
         
         Returns:
-            Dict com resultado da tentativa
+            Dict with attempt result
         """
         try:
-            from ..application.telhado_detection.service import TelhadoDetectionService
-            
             self.logger.info(f"URL: {url[:100]}...")
             self.logger.info(f"Zoom: 19, Resolução: ~1m/pixel")
             
-            # Inicializar quota service
+            from .quota_service import GoogleMapsQuotaService
+            
+            # Initialize quota service
             quota_service = GoogleMapsQuotaService(self.engine)
             tempo_inicio = time.time()
             
-            # Usar TelhadoDetectionService (Application Layer DDD)
-            servico_telhados = TelhadoDetectionService(engine=self.engine, use_gpu=True)
+            # Use DDD TelhadoDetectionService (Application Layer)
+            servico_telhados = self._obter_servico_telhados()
             resultado_deteccao = servico_telhados.processar_telhados_lote(
                 url_imagem=url,
                 id_subestacao=f"trafo_{transformador_id}",
@@ -308,7 +315,7 @@ class TelhadoMultiFonteService:
             tempo_resposta_ms = int((time.time() - tempo_inicio) * 1000)
             status_requisicao = 'sucesso' if resultado_deteccao.telhados_detectados > 0 else 'nenhum_resultado'
             
-            # Registrar quota
+            # Record quota
             resultado_quota = quota_service.registrar_requisicao(
                 transformador_id=transformador_id,
                 subestacao_id=subestacao_id,
@@ -325,7 +332,7 @@ class TelhadoMultiFonteService:
             if resultado_quota['sucesso']:
                 self.logger.info(f"Requisição registrada: Custo=${resultado_quota['custo_usd']:.4f}")
             
-            # Converter telhados para formato comum
+            # Format detected roofs
             telhados_formatados = self._formatar_telhados_detectados(resultado_deteccao)
             
             return {
@@ -358,11 +365,7 @@ class TelhadoMultiFonteService:
                     'url': url
                 }
             }
-
-    # ========================================================================
-    # TENTAR CBERS-4A
-    # ========================================================================
-
+    
     def _tentar_cbers4a(
         self,
         urls_por_fonte: Dict[str, str],
@@ -371,13 +374,13 @@ class TelhadoMultiFonteService:
         confianca_minima: float
     ) -> Dict[str, Any]:
         """
-        Tenta usar CBERS-4A como fallback (gratuito).
+        Try to use CBERS-4A as free fallback.
         
         Returns:
-            Dict com resultado da tentativa
+            Dict with attempt result
         """
         try:
-            # CBERS-4A não custa quota (é gratuito)
+            # CBERS-4A doesn't consume quota (it's free)
             self.logger.info(f"Bandas disponíveis: {list(urls_por_fonte.keys())}")
             self.logger.info(f"ℹ️  CBERS-4A não consome quota (é gratuito)")
             self.logger.info(f"Resolução: 2m/pixel")
@@ -386,7 +389,7 @@ class TelhadoMultiFonteService:
             
             return {
                 'sucesso': True,
-                'telhados_detectados': 0,  # CBERS-4A requer pipeline adicional
+                'telhados_detectados': 0,  # CBERS-4A requires additional pipeline
                 'telhados': [],
                 'bandas': list(urls_por_fonte.keys()),
                 'url_principal': url_principal,
@@ -414,20 +417,16 @@ class TelhadoMultiFonteService:
                     'erro': str(e)
                 }
             }
-
-    # ========================================================================
-    # FORMATAR TELHADOS DETECTADOS
-    # ========================================================================
-
+    
     def _formatar_telhados_detectados(self, resultado_deteccao) -> List[Dict[str, Any]]:
         """
-        Converte resultado de detecção para formato comum.
+        Convert detection result to common format.
         
         Args:
-            resultado_deteccao: Resultado de TelhadoSegmentationService
+            resultado_deteccao: TelhadoDetectionService result
         
         Returns:
-            Lista de dicts com telhados formatados
+            List of formatted roof dicts
         """
         try:
             telhados_formatados = []
@@ -444,7 +443,7 @@ class TelhadoMultiFonteService:
                         'w': telhado.bbox.get('w', 0) if hasattr(telhado, 'bbox') else 0,
                         'h': telhado.bbox.get('h', 0) if hasattr(telhado, 'bbox') else 0
                     },
-                    'resolucao_cm': 100  # ~1m padrão
+                    'resolucao_cm': 100
                 })
             
             return telhados_formatados
