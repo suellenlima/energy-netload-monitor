@@ -112,3 +112,8 @@ tqdm>=4.66.0
 #   pip install --upgrade shapely --no-binary shapely
 #
 # ============================================================================
+
+streamlit==1.37.1
+pandas==2.2.2
+requests==2.32.3
+plotly==5.23.0
