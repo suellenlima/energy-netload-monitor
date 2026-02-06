@@ -85,17 +85,30 @@ def render_executive_kpis(
     _apply_kpi_card_style()
 
     try:
-        # Buscar dados de tempo real - versão simplificada para distribuidora
+        # Buscar dados de tempo real
         if distribuidora:
-            # Use endpoint específico para distribuidora
+            # Use endpoint específico para distribuidora (carga)
             response = client.get(
                 "/analise/carga-atual-distribuidora",
+                params={"distribuidora": distribuidora}
+            )
+            # Também buscar estimativas (geracao_mmgd, consumo_estimado, irradiancia)
+            # do endpoint estado-atual
+            response_estado = client.get(
+                "/analise/estado-atual",
+                params={"subsistema": subsistema}
+            )
+            # Buscar dados de carga oculta/MMGD
+            response_carga_oculta = client.get(
+                "/analise/carga-oculta",
                 params={"distribuidora": distribuidora}
             )
         else:
             # Use endpoint geral por subsistema
             params = {"subsistema": subsistema}
             response = client.get("/analise/estado-atual", params=params)
+            response_estado = response  # Usar a mesma resposta
+            response_carga_oculta = client.get("/analise/carga-oculta", params=params)
 
         # Verificar erro primeiro
         if response.error:
@@ -118,13 +131,38 @@ def render_executive_kpis(
 
         # Suportar ambos os formatos
         if isinstance(response.data, dict):
-            # Formato do novo endpoint carga-atual-distribuidora
+            # Formato do novo endpoint carga-atual-distribuidora (com dados do estado-atual)
             if "carga_ons_mw" in response.data:
                 hora_atual = "--"
                 carga_ons = response.data.get("carga_ons_mw", 0)
-                consumo_estimado = 0  # Não disponível neste endpoint
-                geracao_mmgd = 0  # Não disponível neste endpoint
-                irradiancia = 0  # Não disponível neste endpoint
+                
+                # Priorizar dados de carga_oculta para MMGD (dados reais)
+                if distribuidora and response_carga_oculta and response_carga_oculta.data:
+                    if isinstance(response_carga_oculta.data, list) and len(response_carga_oculta.data) > 0:
+                        ultimo_oculta = response_carga_oculta.data[-1]
+                        geracao_mmgd = ultimo_oculta.get("estimativa_solar_mw", 0)
+                        consumo_estimado = ultimo_oculta.get("consumo_estimado_mw", 0)
+                        # Se não tem consumo_estimado em carga_oculta, buscar em estado-atual
+                        if consumo_estimado == 0 and response_estado and response_estado.data:
+                            if isinstance(response_estado.data, dict) and "estimativas" in response_estado.data:
+                                estimativas = response_estado.data["estimativas"]
+                                consumo_estimado = estimativas.get("consumo_estimado_mw", 0)
+                    else:
+                        geracao_mmgd = 0
+                        consumo_estimado = 0
+                else:
+                    geracao_mmgd = 0
+                    consumo_estimado = 0
+                
+                # Irradiância vem do estado-atual
+                if response_estado and response_estado.data:
+                    if isinstance(response_estado.data, dict) and "estimativas" in response_estado.data:
+                        estimativas = response_estado.data["estimativas"]
+                        irradiancia = estimativas.get("irradiancia_atual_wm2", 0)
+                    else:
+                        irradiancia = 0
+                else:
+                    irradiancia = 0
             # Formato do endpoint estado-atual
             elif "estimativas" in response.data:
                 estimativas = response.data["estimativas"]
@@ -152,10 +190,10 @@ def render_executive_kpis(
                 if distribuidora and "data_medicao" in response.data:
                     data_atual = pd.to_datetime(response.data.get("data_medicao"))
                     
-                    # Buscar dados históricos para comparação
+                    # Buscar dados históricos do novo endpoint carga-distribuidor-historico
                     response_historico = client.get(
-                        "/analise/carga-oculta",
-                        params={"distribuidora": distribuidora}
+                        "/analise/carga-distribuidor-historico",
+                        params={"distribuidora": distribuidora, "dias": 7}
                     )
                     
                     if response_historico.data and len(response_historico.data) > 0:
@@ -188,8 +226,22 @@ def render_executive_kpis(
                 status = "Normal"
                 status_icon = "🔵"
 
-            # Renderizar KPIs em 4 colunas
-            col1, col2, col3, col4 = st.columns(4)
+            # Buscar carga ANEEL se disponível
+            carga_aneel = 0
+            try:
+                if distribuidora:
+                    response_aneel = client.get(
+                        "/analise/carga-distribuidor-historico",
+                        params={"distribuidora": distribuidora, "dias": 1}
+                    )
+                    if response_aneel.data and len(response_aneel.data) > 0:
+                        ultimo_aneel = response_aneel.data[-1]
+                        carga_aneel = ultimo_aneel.get("carga_ons", 0)
+            except Exception as e:
+                logger.debug(f"Não foi possível carregar carga ANEEL: {e}")
+
+            # Renderizar KPIs em 5 colunas
+            col1, col2, col3, col4, col5 = st.columns(5)
 
             with col1:
                 # Formatar delta da carga
@@ -202,7 +254,7 @@ def render_executive_kpis(
                     label="Carga Atual (ONS)",
                     value=f"{carga_ons:,.1f} MW",
                     delta=delta_text,
-                    help="Carga líquida medida pelo ONS nos pontos de entrega"
+                    help="Carga medida pelo ONS na distribuidora"
                 )
 
             with col2:
@@ -210,12 +262,12 @@ def render_executive_kpis(
                     label="Consumo Real Estimado",
                     value=f"{consumo_estimado:,.1f} MW",
                     delta=f"+{geracao_mmgd:,.1f} MW MMGD",
-                    help="Consumo total incluindo geração distribuída local"
+                    help="Carga ONS - Geração MMGD Oficial (ANEEL)"
                 )
 
             with col3:
                 st.metric(
-                    label="Geração MMGD Atual",
+                    label="Geração MMGD Oficial (ANEEL)",
                     value=f"{geracao_mmgd:,.1f} MW",
                     delta=f"{percentual_mmgd:.1f}% do consumo",
                     help="Geração distribuída (solar) consumida localmente"
@@ -223,14 +275,27 @@ def render_executive_kpis(
 
             with col4:
                 st.metric(
-                    label="Status Sistema",
-                    value=status,
+                    label="Penetração Solar",
+                    value=f"{status_icon} {status}",
                     delta=f"{irradiancia:.0f} W/m² irradiância",
                     help="Avaliação baseada na contribuição da MMGD"
+                )
+            with col5:
+                # Potência total ANEEL - não comparar com carga (são grandezas diferentes)
+                # Calcular utilização: carga_atual / potencia_total * 100
+                utilizacao = (carga_ons / carga_aneel * 100) if carga_aneel > 0 else 0
+                delta_text_aneel = f"{utilizacao:.1f}% utilização"
+                
+                st.metric(
+                    label="Potência Total (ANEEL)",
+                    value=f"{carga_aneel:,.1f} MW",
+                    delta=delta_text_aneel,
+                    help="Potência total instalada da distribuidora (capacidade)"
                 )
 
             return {
                 "carga_ons": carga_ons,
+                "carga_aneel": carga_aneel,
                 "consumo_estimado": consumo_estimado,
                 "geracao_mmgd": geracao_mmgd,
                 "percentual_mmgd": percentual_mmgd,
