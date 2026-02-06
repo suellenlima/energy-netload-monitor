@@ -70,6 +70,13 @@ def render_tab_subestacoes_ons(client: ApiClient, distribuidora: str | None, lim
     
     df = pd.DataFrame(result.data)
     
+    # Sanitizar tipos de dados
+    if "tensao_kv" in df.columns:
+        df["tensao_kv"] = pd.to_numeric(df["tensao_kv"], errors="coerce").fillna(0.0).astype(float)
+    for str_col in ["nome", "sigla_se", "subsistema", "distribuidora"]:
+        if str_col in df.columns:
+            df[str_col] = df[str_col].fillna("").astype(str)
+    
     # Reformatar colunas
     df_display = df[["nome", "sigla_se", "tensao_kv", "subsistema", "distribuidora"]].copy()
     df_display.columns = ["Nome", "Sigla", "Tensão (kV)", "Subsistema", "Distribuidora"]
@@ -106,6 +113,15 @@ def render_tab_subestacoes_detectadas(client: ApiClient, distribuidora: str | No
         return
     
     df = pd.DataFrame(result.data)
+    
+    # Sanitizar tipos de dados
+    numeric_cols = ["cluster_id", "quantidade_gd", "potencia_total_mw", "raio_deteccao_km"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0).astype(float)
+    for str_col in ["nome", "subsistema", "distribuidora"]:
+        if str_col in df.columns:
+            df[str_col] = df[str_col].fillna("").astype(str)
     
     # Reformatar
     df_display = df[[
@@ -211,6 +227,13 @@ def render_resumo_subestacoes(client: ApiClient):
             return
         
         df_resumo = pd.DataFrame(result.data)
+        
+        # Sanitizar tipos de dados
+        if "total" in df_resumo.columns:
+            df_resumo["total"] = pd.to_numeric(df_resumo["total"], errors="coerce").fillna(0).astype(int)
+        if "distribuidora" in df_resumo.columns:
+            df_resumo["distribuidora"] = df_resumo["distribuidora"].fillna("").astype(str)
+        
         df_resumo = df_resumo.sort_values("total", ascending=False)
         
         st.dataframe(df_resumo, use_container_width=True, hide_index=True)

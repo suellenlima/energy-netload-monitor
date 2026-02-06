@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Optional
+import re
 
 from sqlalchemy import text
 
@@ -15,6 +16,10 @@ from ....domain.analise import (
     EstadoAtual,
     PerfilCarga,
     ResumoGranular,
+)
+from ....schemas.analise import (
+    EstabelecimentoContagem as EstabelecimentoContagemSchema,
+    ResumoGranular as ResumoGranularSchema,
 )
 
 
@@ -57,11 +62,11 @@ class AnaliseRepositorySQLAlchemy(AnaliseRepository):
                                 COALESCE(SUM(quantidade_empreendimentos), 0) AS total_empreendimentos,
                                 MAX(data_medicao) AS ultima_medicao
                             FROM geracao_mmgd_distribuidora
-                            WHERE distribuidora ILIKE :dist_pattern
+                            WHERE regexp_replace(UPPER(distribuidora), '[^A-Z0-9]', '', 'g') ILIKE :dist_pattern
                             AND potencia_total_kw > 0
                         """)
-                        
-                        dist_pattern = f"%{distribuidora.upper()}%"
+                        # Normalizar nome da distribuidora (remover espaços, pontuação etc.)
+                        dist_pattern = f"%{re.sub('[^A-Z0-9]', '', distribuidora.upper())}%"
                         result = conn.execute(query_mmgd, {"dist_pattern": dist_pattern})
                         row = result.fetchone()
                         
@@ -87,14 +92,13 @@ class AnaliseRepositorySQLAlchemy(AnaliseRepository):
                             
                             # Buscar carga atual desta distribuidora
                             carga_query = text("""
-                                SELECT carga_mw, data_medicao 
+                                SELECT carga_liquida_mw, data_medicao 
                                 FROM carga_distribuidoras
-                                WHERE UPPER(distribuidora) = UPPER(:distribuidora)
+                                WHERE regexp_replace(UPPER(distribuidora), '[^A-Z0-9]', '', 'g') ILIKE :dist_pattern
                                 ORDER BY data_medicao DESC
                                 LIMIT 1
                             """)
-                            
-                            carga_result = conn.execute(carga_query, {"distribuidora": distribuidora})
+                            carga_result = conn.execute(carga_query, {"dist_pattern": dist_pattern})
                             carga_row = carga_result.fetchone()
                             
                             carga_ons = float(carga_row[0]) if carga_row else 180.0
@@ -122,7 +126,7 @@ class AnaliseRepositorySQLAlchemy(AnaliseRepository):
                                 sol_wm2 = 1000 * fator if fator > 0.1 else 0
                                 
                                 item = {
-                                    "hora": timestamp.isoformat(),
+                                    "hora": timestamp,
                                     "distribuidora": distribuidora,
                                     "carga_ons": carga_ons,
                                     "estimativa_solar_mw": geracao_total_hora,
@@ -140,14 +144,13 @@ class AnaliseRepositorySQLAlchemy(AnaliseRepository):
                             
                             # Buscar carga atual desta distribuidora
                             carga_query = text("""
-                                SELECT carga_mw, data_medicao 
+                                SELECT carga_liquida_mw, data_medicao 
                                 FROM carga_distribuidoras
-                                WHERE UPPER(distribuidora) = UPPER(:distribuidora)
+                                WHERE regexp_replace(UPPER(distribuidora), '[^A-Z0-9]', '', 'g') ILIKE :dist_pattern
                                 ORDER BY data_medicao DESC
                                 LIMIT 1
                             """)
-                            
-                            carga_result = conn.execute(carga_query, {"distribuidora": distribuidora})
+                            carga_result = conn.execute(carga_query, {"dist_pattern": dist_pattern})
                             carga_row = carga_result.fetchone()
                             
                             carga_ons = float(carga_row[0]) if carga_row else 180.0
@@ -193,7 +196,7 @@ class AnaliseRepositorySQLAlchemy(AnaliseRepository):
                                 sol_wm2 = 1000 * fator if fator > 0.1 else 0
                                 
                                 item = {
-                                    "hora": timestamp.isoformat(),
+                                    "hora": timestamp,
                                     "distribuidora": distribuidora,
                                     "carga_ons": carga_ons,
                                     "estimativa_solar_mw": geracao_total_hora,
@@ -257,7 +260,7 @@ class AnaliseRepositorySQLAlchemy(AnaliseRepository):
                     sol_wm2 = 1000 * fator if fator > 0.1 else 0
                     
                     item = {
-                        "hora": timestamp.isoformat(),
+                        "hora": timestamp,
                         "distribuidora": distribuidora or subsistema,
                         "carga_ons": 180.0 + 20.0 * math.sin((i - 12) * math.pi / 12),
                         "estimativa_solar_mw": geracao_hora,
@@ -332,17 +335,46 @@ class AnaliseRepositorySQLAlchemy(AnaliseRepository):
         self, distribuidora: Optional[str] = None
     ) -> list[dict]:
         """Get consumption classes mapped to response schema."""
+        import re
         try:
             with self.engine.connect() as conn:
-                query = text("""
-                    SELECT 
-                        'residencial' as classe,
-                        0.0 as consumo_mwh,
-                        0.0 as consumo_percentual,
-                        0 as quantidade_ucs
-                    LIMIT 1
-                """)
-                result = conn.execute(query)
+                # Query que busca distribuição de consumo por classe REAL
+                if distribuidora:
+                    # Normalizar nome da distribuidora (remover espaços, pontuação etc.)
+                    dist_pattern = f"%{re.sub('[^A-Z0-9]', '', distribuidora.upper())}%"
+                    query = text("""
+                        SELECT 
+                            COALESCE(classe_consumo, 'residencial') as classe,
+                            COALESCE(SUM(consumo_kwh), 0.0) / 1000.0 as consumo_mwh,
+                            CASE 
+                                WHEN SUM(SUM(consumo_kwh)) OVER () > 0 
+                                THEN (SUM(consumo_kwh) / SUM(SUM(consumo_kwh)) OVER ()) * 100
+                                ELSE 0.0
+                            END as consumo_percentual,
+                            COALESCE(COUNT(*), 0) as quantidade_ucs
+                        FROM consumo_granular_classe
+                        WHERE regexp_replace(UPPER(distribuidora), '[^A-Z0-9]', '', 'g') ILIKE :dist_pattern
+                        GROUP BY classe_consumo
+                        ORDER BY consumo_mwh DESC
+                    """)
+                    result = conn.execute(query, {"dist_pattern": dist_pattern})
+                else:
+                    query = text("""
+                        SELECT 
+                            COALESCE(classe_consumo, 'residencial') as classe,
+                            COALESCE(SUM(consumo_kwh), 0.0) / 1000.0 as consumo_mwh,
+                            CASE 
+                                WHEN SUM(SUM(consumo_kwh)) OVER () > 0 
+                                THEN (SUM(consumo_kwh) / SUM(SUM(consumo_kwh)) OVER ()) * 100
+                                ELSE 0.0
+                            END as consumo_percentual,
+                            COALESCE(COUNT(*), 0) as quantidade_ucs
+                        FROM consumo_granular_classe
+                        GROUP BY classe_consumo
+                        ORDER BY consumo_mwh DESC
+                    """)
+                    result = conn.execute(query)
+
                 rows = result.fetchall()
 
                 classes = []
@@ -405,29 +437,48 @@ class AnaliseRepositorySQLAlchemy(AnaliseRepository):
         self, distribuidora: Optional[str] = None
     ) -> list[dict]:
         """Get establishment count mapped to response schema."""
+        import re
         try:
             with self.engine.connect() as conn:
-                query = text("""
-                    SELECT 
-                        'tipo' as tipo_estabelecimento,
-                        0 as quantidade,
-                        0.0 as consumo_medio_mwh
-                    LIMIT 1
-                """)
-                result = conn.execute(query)
+                # Query que busca contagem de estabelecimentos REAIS por tipo na tabela gd_granular
+                if distribuidora:
+                    # Normalizar nome da distribuidora (remover espaços, pontuação etc.)
+                    dist_normalized = re.sub('[^A-Z0-9]', '', distribuidora.upper())
+                    query = text("""
+                        SELECT 
+                            COALESCE(tipo_estabelecimento, 'outro') as tipo_estabelecimento,
+                            COUNT(*) as quantidade,
+                            COALESCE(SUM(potencia_kw), 0.0) / 1000.0 as total_mw
+                        FROM gd_granular
+                        WHERE distribuidora_normalizada LIKE :dist_normalized
+                        GROUP BY tipo_estabelecimento
+                        ORDER BY quantidade DESC
+                    """)
+                    result = conn.execute(query, {"dist_normalized": f"%{dist_normalized}%"})
+                else:
+                    query = text("""
+                        SELECT 
+                            COALESCE(tipo_estabelecimento, 'outro') as tipo_estabelecimento,
+                            COUNT(*) as quantidade,
+                            COALESCE(SUM(potencia_kw), 0.0) / 1000.0 as total_mw
+                        FROM gd_granular
+                        GROUP BY tipo_estabelecimento
+                        ORDER BY quantidade DESC
+                    """)
+                    result = conn.execute(query)
+                
                 rows = result.fetchall()
 
                 contagens = []
                 for row in rows:
-                    # Convert row to domain entity
-                    contagem = EstabelecimentoContagem(
-                        tipo_estabelecimento=row[0],
-                        quantidade=row[1],
-                        consumo_medio_mwh=row[2],
-                    )
-                    # Map domain entity to response schema format
-                    from .mapper import estabelecimento_contagem_to_response
-                    contagens.append(estabelecimento_contagem_to_response(contagem))
+                    # Mapear diretamente para schema
+                    contagem_dict = {
+                        "tipo": row[0],
+                        "quantidade": row[1],
+                        "total_unidades": row[1] * 2,  # Proxy: 2 UCs por instalação
+                        "total_mw": float(row[2])  # Total MW do tipo
+                    }
+                    contagens.append(contagem_dict)
 
                 return contagens
         except Exception:
@@ -435,34 +486,53 @@ class AnaliseRepositorySQLAlchemy(AnaliseRepository):
 
     def obter_resumo_granular(
         self, distribuidora: Optional[str] = None
-    ) -> Optional[ResumoGranular]:
-        """Get granular data summary."""
+    ) -> Optional[ResumoGranularSchema]:
+        """Get granular data summary from gd_granular table."""
+        import re
         try:
             with self.engine.connect() as conn:
-                query = text("""
-                    SELECT 
-                        0 as total_ucs,
-                        0.0 as consumo_total_mwh,
-                        0.0 as consumo_medio_por_uc_mwh,
-                        0.0 as geracao_mmgd_mw,
-                        'distribuidora' as distribuidora,
-                        '2026-02' as periodo
-                    LIMIT 1
-                """)
-                result = conn.execute(query)
-                row = result.fetchone()
+                # Query que busca resumo REAL de dados granulares da tabela gd_granular
+                if distribuidora:
+                    # Normalizar nome da distribuidora (remover espaços, pontuação etc.)
+                    dist_normalized = re.sub('[^A-Z0-9]', '', distribuidora.upper())
+                    consumo_query = text("""
+                        SELECT 
+                            COALESCE(COUNT(*), 0) as total_ucs,
+                            COALESCE(SUM(potencia_kw), 0.0) / 1000.0 as potencia_total_mw,
+                            CASE 
+                                WHEN COUNT(*) > 0 THEN COALESCE(SUM(potencia_kw), 0.0) / COALESCE(COUNT(*), 1) / 1000.0
+                                ELSE 0.0
+                            END as potencia_media_por_uc_mw
+                        FROM gd_granular
+                        WHERE distribuidora_normalizada LIKE :dist_normalized
+                    """)
+                    consumo_result = conn.execute(consumo_query, {"dist_normalized": f"%{dist_normalized}%"})
+                else:
+                    consumo_query = text("""
+                        SELECT 
+                            COALESCE(COUNT(*), 0) as total_ucs,
+                            COALESCE(SUM(potencia_kw), 0.0) / 1000.0 as potencia_total_mw,
+                            CASE 
+                                WHEN COUNT(*) > 0 THEN COALESCE(SUM(potencia_kw), 0.0) / COALESCE(COUNT(*), 1) / 1000.0
+                                ELSE 0.0
+                            END as potencia_media_por_uc_mw
+                        FROM gd_granular
+                    """)
+                    consumo_result = conn.execute(consumo_query)
 
-                if row:
-                    return ResumoGranular(
-                        total_ucs=row[0],
-                        consumo_total_mwh=row[1],
-                        consumo_medio_por_uc_mwh=row[2],
-                        geracao_mmgd_mw=row[3],
-                        distribuidora=row[4],
-                        periodo=row[5],
+                consumo_row = consumo_result.fetchone()
+
+                # Usar os dados de potência como proxy para resumo
+                if consumo_row:
+                    # Retornar apenas o resumo, sem por_tipo (que já está em /contagem)
+                    return ResumoGranularSchema(
+                        total_instalacoes=int(consumo_row[0]),
+                        total_unidades_consumidoras=int(consumo_row[0] * 2),  # Proxy: 2 UCs por instalação
+                        total_mw=float(consumo_row[1]),
+                        por_tipo={},  # Vazio - dados completos em /contagem
                     )
                 return None
-        except Exception:
+        except Exception as e:
             return None
 
     def obter_perfis_carga(
@@ -698,4 +768,270 @@ class AnaliseRepositorySQLAlchemy(AnaliseRepository):
             import logging
             logger = logging.getLogger(__name__)
             logger.error(f"Erro ao obter carga histórica: {e}")
+            return []
+    def obter_carga_por_classe(
+        self, distribuidora: Optional[str] = None, limite: int = 288
+    ) -> list[dict]:
+        """
+        Obtém distribuição de consumo por classe de consumo (dados agregados de consumo_granular_classe).
+        
+        Args:
+            distribuidora: Filtrar por distribuidora (opcional)
+            limite: Número máximo de registros (não usado para agregado)
+        
+        Returns:
+            Lista de dicts com: classe, consumo_kwh, consumo_mwh
+        """
+        import re
+        try:
+            with self.engine.connect() as conn:
+                if distribuidora:
+                    dist_pattern = f"%{re.sub('[^A-Z0-9]', '', distribuidora.upper())}%"
+                    query = text("""
+                        SELECT 
+                            LOWER(classe_consumo) as classe_consumo,
+                            SUM(consumo_kwh) as consumo_total_kwh
+                        FROM consumo_granular_classe
+                        WHERE regexp_replace(UPPER(distribuidora), '[^A-Z0-9]', '', 'g') ILIKE :dist_pattern
+                        GROUP BY LOWER(classe_consumo)
+                        ORDER BY consumo_total_kwh DESC
+                    """)
+                    result = conn.execute(query, {"dist_pattern": dist_pattern})
+                else:
+                    query = text("""
+                        SELECT 
+                            LOWER(classe_consumo) as classe_consumo,
+                            SUM(consumo_kwh) as consumo_total_kwh
+                        FROM consumo_granular_classe
+                        GROUP BY LOWER(classe_consumo)
+                        ORDER BY consumo_total_kwh DESC
+                    """)
+                    result = conn.execute(query, {})
+
+                rows = result.fetchall()
+                
+                # Mapear nomes das classes
+                class_mapping = {
+                    "comercial": "comercio",
+                    "industrial": "industria",
+                    "residencial": "residencia",
+                    "outro": "outro",
+                }
+                
+                carga_por_classe = []
+                for row in rows:
+                    classe_raw = (row[0] or "outro").lower().strip()
+                    classe_normalizada = class_mapping.get(classe_raw, classe_raw)
+                    consumo_kwh = float(row[1]) if row[1] else 0.0
+                    
+                    carga_por_classe.append({
+                        "classe": classe_normalizada,
+                        "consumo_kwh": consumo_kwh,
+                        "consumo_mwh": consumo_kwh / 1000.0,
+                    })
+                
+                return carga_por_classe
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Erro ao obter carga por classe: {e}")
+            return []
+
+    def obter_carga_distribuidora_horaria(
+        self, distribuidora: Optional[str] = None, limite: int = 288
+    ) -> list[dict]:
+        """
+        Obtém série temporal de carga por distribuidora (dados reais de carga_distribuidoras).
+        
+        Args:
+            distribuidora: Filtrar por distribuidora (opcional)
+            limite: Número máximo de registros (padrão: 288 = 12 dias horários)
+        
+        Returns:
+            Lista de dicts com: data_medicao, distribuidora, carga_liquida_mw, carga_estimada_total_mw
+        """
+        import re
+        try:
+            with self.engine.connect() as conn:
+                if distribuidora:
+                    dist_pattern = f"%{re.sub('[^A-Z0-9]', '', distribuidora.upper())}%"
+                    query = text("""
+                        SELECT 
+                            data_medicao,
+                            distribuidora,
+                            carga_liquida_mw,
+                            carga_estimada_total_mw
+                        FROM carga_distribuidoras
+                        WHERE regexp_replace(UPPER(distribuidora), '[^A-Z0-9]', '', 'g') ILIKE :dist_pattern
+                        ORDER BY data_medicao DESC
+                        LIMIT :limite
+                    """)
+                    result = conn.execute(query, {"dist_pattern": dist_pattern, "limite": limite})
+                else:
+                    query = text("""
+                        SELECT 
+                            data_medicao,
+                            distribuidora,
+                            carga_liquida_mw,
+                            carga_estimada_total_mw
+                        FROM carga_distribuidoras
+                        ORDER BY data_medicao DESC
+                        LIMIT :limite
+                    """)
+                    result = conn.execute(query, {"limite": limite})
+
+                rows = result.fetchall()
+                
+                carga_data = []
+                for row in rows:
+                    carga_data.append({
+                        "data_medicao": str(row[0]),
+                        "distribuidora": row[1],
+                        "carga_liquida_mw": float(row[2]) if row[2] else 0.0,
+                        "carga_estimada_total_mw": float(row[3]) if row[3] else 0.0,
+                    })
+                
+                return carga_data
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Erro ao obter carga distribuidora horária: {e}")
+            return []
+
+    def obter_curva_pato(
+        self, distribuidora: Optional[str] = None, dias: int = 30
+    ) -> list[dict]:
+        """
+        Obtém a "curva de pato" - padrão de carga por hora do dia (agregado de múltiplos dias).
+        
+        A curva de pato mostra:
+        - Manhã: Aumento de demanda (acordar)
+        - Meio do dia: Redução (geração solar alta)
+        - Entardecer: Pico de demanda (pôr do sol + retorno do trabalho)
+        - Noite: Redução gradual
+        
+        Args:
+            distribuidora: Filtrar por distribuidora (opcional)
+            dias: Número de dias para agregar (padrão: 30 dias)
+        
+        Returns:
+            Lista de dicts com: hora, carga_media_mw, carga_minima_mw, carga_maxima_mw
+        """
+        import re
+        try:
+            with self.engine.connect() as conn:
+                if distribuidora:
+                    dist_pattern = f"%{re.sub('[^A-Z0-9]', '', distribuidora.upper())}%"
+                    query = text("""
+                        SELECT 
+                            EXTRACT(HOUR FROM data_medicao)::int as hora,
+                            AVG(carga_liquida_mw) as carga_media_mw,
+                            MIN(carga_liquida_mw) as carga_minima_mw,
+                            MAX(carga_liquida_mw) as carga_maxima_mw,
+                            COUNT(*) as qtd_observacoes
+                        FROM carga_distribuidoras
+                        WHERE regexp_replace(UPPER(distribuidora), '[^A-Z0-9]', '', 'g') ILIKE :dist_pattern
+                        AND data_medicao >= NOW() - INTERVAL '1 day' * :dias
+                        GROUP BY EXTRACT(HOUR FROM data_medicao)
+                        ORDER BY hora
+                    """)
+                    result = conn.execute(query, {"dist_pattern": dist_pattern, "dias": dias})
+                else:
+                    query = text("""
+                        SELECT 
+                            EXTRACT(HOUR FROM data_medicao)::int as hora,
+                            AVG(carga_liquida_mw) as carga_media_mw,
+                            MIN(carga_liquida_mw) as carga_minima_mw,
+                            MAX(carga_liquida_mw) as carga_maxima_mw,
+                            COUNT(*) as qtd_observacoes
+                        FROM carga_distribuidoras
+                        WHERE data_medicao >= NOW() - INTERVAL '1 day' * :dias
+                        GROUP BY EXTRACT(HOUR FROM data_medicao)
+                        ORDER BY hora
+                    """)
+                    result = conn.execute(query, {"dias": dias})
+
+                rows = result.fetchall()
+                
+                curva_pato = []
+                for row in rows:
+                    hora = int(row[0]) if row[0] is not None else 0
+                    
+                    curva_pato.append({
+                        "hora": f"{hora:02d}:00",
+                        "carga_media_mw": float(row[1]) if row[1] else 0.0,
+                        "carga_minima_mw": float(row[2]) if row[2] else 0.0,
+                        "carga_maxima_mw": float(row[3]) if row[3] else 0.0,
+                        "qtd_observacoes": int(row[4]) if row[4] else 0,
+                    })
+                
+                return curva_pato
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Erro ao obter curva de pato: {e}")
+            return []
+
+    def obter_carga_ons_realtime(
+        self, subsistema: Optional[str] = None, distribuidora: Optional[str] = None, limite: int = 288
+    ) -> list[dict]:
+        """
+        Obtém dados de carga do ONS em tempo real.
+        
+        Args:
+            subsistema: Filtrar por subsistema (SUDESTE, SUL, NORDESTE, NORTE) - opcional
+            distribuidora: Filtrar por distribuidora (LIGHT, ENEL, etc.) - opcional
+            limite: Número máximo de registros
+        
+        Returns:
+            Lista de dicts com: data_medicao, subsistema, distribuidora, carga_mw, percentual
+        """
+        try:
+            with self.engine.connect() as conn:
+                # Construir query dinâmica baseada em filtros
+                where_clauses = ["1=1"]
+                params = {"limite": limite}
+                
+                if subsistema:
+                    where_clauses.append("UPPER(subsistema) ILIKE :subsistema")
+                    params["subsistema"] = f"%{subsistema.upper()}%"
+                
+                if distribuidora:
+                    where_clauses.append("UPPER(distribuidora) ILIKE :distribuidora")
+                    params["distribuidora"] = f"%{distribuidora.upper()}%"
+                
+                where_clause = " AND ".join(where_clauses)
+                
+                query = text(f"""
+                    SELECT 
+                        data_medicao,
+                        subsistema,
+                        distribuidora,
+                        carga_mw,
+                        percentual
+                    FROM carga_ons_realtime
+                    WHERE {where_clause}
+                    ORDER BY data_medicao DESC
+                    LIMIT :limite
+                """)
+                
+                result = conn.execute(query, params)
+
+                rows = result.fetchall()
+                
+                carga_ons = []
+                for row in rows:
+                    carga_ons.append({
+                        "data_medicao": str(row[0]) if row[0] else None,
+                        "subsistema": row[1],
+                        "distribuidora": row[2],
+                        "carga_mw": float(row[3]) if row[3] else 0.0,
+                        "percentual": float(row[4]) if row[4] else 0.0,
+                    })
+                
+                return carga_ons
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Erro ao obter carga ONS em tempo real: {e}")
             return []

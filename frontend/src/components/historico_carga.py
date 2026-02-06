@@ -60,7 +60,7 @@ def render_historico_carga(
 
         # Converter data para datetime se necessário
         if df['hora'].dtype == 'object':
-            df['hora'] = pd.to_datetime(df['hora'])
+            df['hora'] = pd.to_datetime(df['hora'], format="mixed", errors="coerce")
 
         # Ordenar por data
         df = df.sort_values('hora')
@@ -234,8 +234,13 @@ def render_comparacao_distribuidoras(
             if response.data and len(response.data) > 0:
                 df = pd.DataFrame(response.data)
                 if 'data_criacao' in df.columns:
-                    df['data_criacao'] = pd.to_datetime(df['data_criacao'])
-                    dados_dist[dist] = df
+                    df['data_criacao'] = pd.to_datetime(df['data_criacao'], format="mixed", errors="coerce")
+                # Sanitizar colunas numéricas
+                numeric_cols = ["carga_ons", "estimativa_solar_mw", "consumo_estimado_mw", "carga_real_estimada"]
+                for col in numeric_cols:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0).astype(float)
+                dados_dist[dist] = df
 
         if not dados_dist:
             st.info("❌ Nenhum dado disponível para as distribuidoras selecionadas.")

@@ -131,10 +131,38 @@ def render_executive_kpis(
 
         # Suportar ambos os formatos
         if isinstance(response.data, dict):
-            # Formato do novo endpoint carga-atual-distribuidora (com dados do estado-atual)
-            if "carga_ons_mw" in response.data:
+            # Formato do novo endpoint carga-atual-distribuidora (com dados separados)
+            if "carga_granular_mw" in response.data:
                 hora_atual = "--"
-                carga_ons = response.data.get("carga_ons_mw", 0)
+                # Separar carga granular e líquida
+                carga_granular = response.data.get("carga_granular_mw", 0)  # Carga Atual (ONS) - só granular
+                carga_liquida = response.data.get("carga_liquida_mw", 0)    # Carga Líquida
+                carga_ons = carga_granular  # Carga Atual = apenas granular
+                
+                # Consumo Real Estimado = granular + líquida
+                consumo_estimado = carga_granular + carga_liquida
+                
+                # Priorizar dados de carga_oculta para MMGD (dados reais)
+                if distribuidora and response_carga_oculta and response_carga_oculta.data:
+                    if isinstance(response_carga_oculta.data, list) and len(response_carga_oculta.data) > 0:
+                        ultimo_oculta = response_carga_oculta.data[-1]
+                        geracao_mmgd = ultimo_oculta.get("estimativa_solar_mw", 0)
+                    else:
+                        geracao_mmgd = 0
+                else:
+                    geracao_mmgd = 0
+                
+                # Irradiância vem do estado-atual
+                irradiancia = 0
+                if response_estado and response_estado.data:
+                    if isinstance(response_estado.data, dict) and "estimativas" in response_estado.data:
+                        estimativas = response_estado.data["estimativas"]
+                        irradiancia = estimativas.get("irradiancia_atual_wm2", 0)
+            # Formato antigo com carga_mw (fallback)
+            elif "carga_mw" in response.data:
+                hora_atual = "--"
+                carga_liquida_mw = response.data.get("carga_mw", 0)
+                carga_ons = carga_liquida_mw
                 
                 # Priorizar dados de carga_oculta para MMGD (dados reais)
                 if distribuidora and response_carga_oculta and response_carga_oculta.data:
@@ -155,14 +183,11 @@ def render_executive_kpis(
                     consumo_estimado = 0
                 
                 # Irradiância vem do estado-atual
+                irradiancia = 0
                 if response_estado and response_estado.data:
                     if isinstance(response_estado.data, dict) and "estimativas" in response_estado.data:
                         estimativas = response_estado.data["estimativas"]
                         irradiancia = estimativas.get("irradiancia_atual_wm2", 0)
-                    else:
-                        irradiancia = 0
-                else:
-                    irradiancia = 0
             # Formato do endpoint estado-atual
             elif "estimativas" in response.data:
                 estimativas = response.data["estimativas"]
@@ -188,7 +213,7 @@ def render_executive_kpis(
             try:
                 # Se for endpoint de distribuidora com data_medicao
                 if distribuidora and "data_medicao" in response.data:
-                    data_atual = pd.to_datetime(response.data.get("data_medicao"))
+                    data_atual = pd.to_datetime(response.data.get("data_medicao"), format="mixed", errors="coerce")
                     
                     # Buscar dados históricos do novo endpoint carga-distribuidor-historico
                     response_historico = client.get(
@@ -199,7 +224,13 @@ def render_executive_kpis(
                     if response_historico.data and len(response_historico.data) > 0:
                         df_hist = pd.DataFrame(response_historico.data)
                         if not df_hist.empty and "hora" in df_hist.columns:
-                            df_hist["hora"] = pd.to_datetime(df_hist["hora"])
+                            df_hist["hora"] = pd.to_datetime(df_hist["hora"], format="mixed", errors="coerce")
+                            
+                            # Sanitizar colunas numéricas
+                            numeric_cols = ["carga_ons", "estimativa_solar_mw", "consumo_estimado_mw", "carga_real_estimada"]
+                            for col in numeric_cols:
+                                if col in df_hist.columns:
+                                    df_hist[col] = pd.to_numeric(df_hist[col], errors="coerce").fillna(0.0).astype(float)
                             
                             # Filtrar para 24h atrás
                             data_anterior = data_atual - timedelta(days=1)
@@ -251,26 +282,26 @@ def render_executive_kpis(
                     delta_text = "Tempo real diário"
                 
                 st.metric(
-                    label="Carga Atual (ONS)",
-                    value=f"{carga_ons:,.1f} MW",
+                    label="Carga Instantânea",
+                    value=f"~{carga_ons:,.1f} MW",
                     delta=delta_text,
-                    help="Carga medida pelo ONS na distribuidora"
+                    help="Carga Granular total da distribuidora (medida)"
                 )
 
             with col2:
                 st.metric(
-                    label="Consumo Real Estimado",
-                    value=f"{consumo_estimado:,.1f} MW",
+                    label="Consumo Estimado",
+                    value=f"~{consumo_estimado:,.1f} MW",
                     delta=f"+{geracao_mmgd:,.1f} MW MMGD",
-                    help="Carga ONS - Geração MMGD Oficial (ANEEL)"
+                    help="Granular"
                 )
 
             with col3:
                 st.metric(
-                    label="Geração MMGD Oficial (ANEEL)",
+                    label="🏭 Geração MMGD (Agora)",
                     value=f"{geracao_mmgd:,.1f} MW",
-                    delta=f"{percentual_mmgd:.1f}% do consumo",
-                    help="Geração distribuída (solar) consumida localmente"
+                    delta=f"+{geracao_mmgd:,.1f} MW geração",
+                    help="Geração distribuída estimada (painéis solares, mini-usinas)"
                 )
 
             with col4:
