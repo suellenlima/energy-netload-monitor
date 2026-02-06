@@ -32,8 +32,113 @@ def load_carga_data(client: ApiClient, subsistema: str, distribuidora: str) -> p
         return pd.DataFrame()
 
     df = pd.DataFrame(result.data)
-    if not df.empty and "hora" in df.columns:
-        df["hora"] = pd.to_datetime(df["hora"])
+    if not df.empty:
+        # Converter 'hora' para datetime
+        if "hora" in df.columns:
+            df["hora"] = pd.to_datetime(df["hora"], format="mixed", errors="coerce")
+        
+        # Sanitizar colunas numéricas (remover valores inválidos)
+        numeric_cols = ["carga_ons", "estimativa_solar_mw", "consumo_estimado_mw", "carga_real_estimada", "sol_wm2", "sol_wm2_final", "percentual_total"]
+        for col in numeric_cols:
+            if col in df.columns:
+                # Converter para float, colocando NaN para valores inválidos
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                # Substituir NaN por 0
+                df[col] = df[col].fillna(0.0)
+                # Garantir tipo float64 explicitamente para Arrow compatibility
+                df[col] = df[col].astype('float64')
+        
+        # Remover linhas com todos os valores numéricos como 0 (dados inválidos)
+        numeric_check = df[numeric_cols].sum(axis=1)
+        df = df[numeric_check > 0].reset_index(drop=True)
+        
+        # Buscar dados de carga por classe (agregado diário)
+        try:
+            params_classe = {"distribuidora": distribuidora} if distribuidora else {}
+            result_classe = client.get("/analise/carga-por-classe", params=params_classe)
+            if not result_classe.error and result_classe.data:
+                df_classe = pd.DataFrame(result_classe.data)
+                if not df_classe.empty:
+                    # Armazenar dados de classe como atributo do DataFrame
+                    df.attrs["carga_por_classe"] = df_classe
+        except Exception as e:
+            # Se falhar ao buscar dados de classe, continuar sem eles
+            import logging
+            logging.warning(f"Aviso: Não foi possível buscar carga por classe: {e}")
+        
+        # Buscar dados de carga distribuidora horária (série temporal real)
+        try:
+            params_dist = {"distribuidora": distribuidora} if distribuidora else {}
+            result_dist = client.get("/analise/carga-distribuidora-horaria", params=params_dist)
+            if not result_dist.error and result_dist.data:
+                df_dist = pd.DataFrame(result_dist.data)
+                if not df_dist.empty:
+                    # Converter data_medicao para datetime
+                    if "data_medicao" in df_dist.columns:
+                        df_dist["data_medicao"] = pd.to_datetime(
+                            df_dist["data_medicao"],
+                            format="mixed",
+                            errors="coerce"
+                        )
+                    # Sanitizar colunas numéricas
+                    numeric_cols = ["carga_liquida_mw", "carga_estimada_total_mw"]
+                    for col in numeric_cols:
+                        if col in df_dist.columns:
+                            df_dist[col] = pd.to_numeric(df_dist[col], errors="coerce").fillna(0.0).astype('float64')
+                    # Garantir que distribuidora é string
+                    if "distribuidora" in df_dist.columns:
+                        df_dist["distribuidora"] = df_dist["distribuidora"].astype(str)
+                    # Armazenar dados de distribuidora como atributo do DataFrame
+                    df.attrs["carga_distribuidora_horaria"] = df_dist
+        except Exception as e:
+            # Se falhar ao buscar dados de distribuidora, continuar sem eles
+            import logging
+            logging.warning(f"Aviso: Não foi possível buscar carga distribuidora horária: {e}")
+        
+        # Buscar dados de curva de pato
+        try:
+            params_pato = {"distribuidora": distribuidora, "dias": 30} if distribuidora else {"dias": 30}
+            result_pato = client.get("/analise/curva-pato", params=params_pato)
+            if not result_pato.error and result_pato.data:
+                df_pato = pd.DataFrame(result_pato.data)
+                if not df_pato.empty:
+                    # Armazenar dados de curva de pato como atributo do DataFrame
+                    df.attrs["curva_pato"] = df_pato
+        except Exception as e:
+            # Se falhar ao buscar curva de pato, continuar sem ela
+            import logging
+            logging.warning(f"Aviso: Não foi possível buscar curva de pato: {e}")
+        
+        # Buscar dados de carga ONS em tempo real
+        try:
+            result_ons = client.get("/analise/carga-ons-realtime", params={"limite": 288})
+            if not result_ons.error and result_ons.data:
+                df_ons = pd.DataFrame(result_ons.data)
+                if not df_ons.empty:
+                    # Converter data_medicao para datetime
+                    if "data_medicao" in df_ons.columns:
+                        df_ons["data_medicao"] = pd.to_datetime(
+                            df_ons["data_medicao"],
+                            format="mixed",
+                            errors="coerce"
+                        )
+                    # Sanitizar colunas numéricas
+                    numeric_cols = ["carga_mw", "percentual"]
+                    for col in numeric_cols:
+                        if col in df_ons.columns:
+                            df_ons[col] = pd.to_numeric(df_ons[col], errors="coerce").fillna(0.0).astype(float)
+                    # Garantir que subsistema e distribuidora são strings
+                    for str_col in ["subsistema", "distribuidora"]:
+                        if str_col in df_ons.columns:
+                            df_ons[str_col] = df_ons[str_col].fillna("").astype(str)
+                    # Armazenar dados do ONS como atributo do DataFrame
+                    df.attrs["carga_ons_realtime"] = df_ons
+        except Exception as e:
+            # Se falhar ao buscar dados do ONS, continuar sem eles
+            import logging
+            logging.warning(f"Aviso: Não foi possível buscar carga ONS em tempo real: {e}")
+        
+    
     return df
 
 
@@ -42,6 +147,8 @@ def render_carga_section(
     impacto_projecao_mw: float,
     multiplicador: int,
     subsistema: str,
+    distribuidora: str | None = None,
+    client: ApiClient = None,
 ) -> None:
     """
     Renderiza gráfico comparativo de cargas mostrando a separação entre:
@@ -54,16 +161,30 @@ def render_carga_section(
         impacto_projecao_mw: Impacto estimado de MMGD nao mapeada (opcional)
         multiplicador: Fator multiplicador para projeção de MMGD nao mapeada
         subsistema: Nome do subsistema elétrico
+        distribuidora: Nome da distribuidora (opcional)
+        client: Cliente API para buscar dados adicionais (opcional)
     """
-    st.header(f"Análise de Carga: Líquida vs Real ({subsistema})")
+    st.header(f"Análise Diária de Carga: Líquida vs Real")
 
     if df_carga.empty:
         st.info("Sem dados de carga para o período selecionado.")
         return
+    
+    # Validar colunas obrigatórias
+    required_cols = ["hora", "carga_ons", "estimativa_solar_mw", "carga_real_estimada"]
+    missing_cols = [col for col in required_cols if col not in df_carga.columns]
+    if missing_cols:
+        st.error(f"Colunas faltando no DataFrame: {missing_cols}")
+        return
+    
+    # Validar que temos dados válidos (não apenas zeros)
+    if df_carga[["carga_ons", "estimativa_solar_mw", "carga_real_estimada"]].sum().sum() == 0:
+        st.warning("Dados de carga contêm apenas valores zeros. Verifique a API.")
+        return
 
     # Calcular carga auditada se houver projeção de fraude
     if impacto_projecao_mw > 0:
-        df_carga["carga_auditada"] = df_carga["carga_real_estimada"] + impacto_projecao_mw
+        df_carga["carga_auditada"] = (df_carga["carga_real_estimada"] + impacto_projecao_mw).astype('float64')
 
     # ===== MÉTRICAS PRINCIPAIS =====
     col1, col2, col3, col4 = st.columns(4)
@@ -73,24 +194,72 @@ def render_carga_section(
     geracao_mmgd_atual = df_carga.iloc[-1]["estimativa_solar_mw"]
     consumo_real_atual = df_carga.iloc[-1]["carga_real_estimada"]
 
-    # Estatísticas diárias
-    pico_solar_dia = df_carga["estimativa_solar_mw"].max()
-    hora_pico = df_carga.loc[df_carga["estimativa_solar_mw"].idxmax(), "hora"].strftime("%Hh")
+    # Pico solar às 12h (meio-dia)
+    df_carga_12h = df_carga[df_carga["hora"].dt.hour == 12]
+    if not df_carga_12h.empty:
+        pico_solar_dia = df_carga_12h["estimativa_solar_mw"].values[0]
+    else:
+        # Fallback: usar o máximo do dia se não houver dado às 12h
+        pico_solar_dia = df_carga["estimativa_solar_mw"].max()
+    hora_pico = "12h"
 
     col1.metric(
         "⚡ Carga Líquida (ONS)",
         format_mw(carga_liquida_atual, decimals=0),
         help="Carga medida pelo ONS nos pontos de entrega (transmissão)"
     )
-    col2.metric(
-        "🏭 Geração MMGD (Agora)",
-        format_mw(geracao_mmgd_atual, decimals=0),
-        help="Geração distribuída (painéis solares, mini-usinas)"
-    )
+    
+    # Buscar dados reais de painéis detectados
+    try:
+        if distribuidora and client:
+            result_paineis = client.get("/analise/mmgd-detectada-paineis", params={"distribuidora": distribuidora})
+            if not result_paineis.error and result_paineis.data:
+                data_paineis = result_paineis.data
+                potencia_mw = data_paineis.get("potencia_detectada_mw", 0.0)
+                paineis_count = data_paineis.get("paineis_detectados", 0)
+                confianca = data_paineis.get("confianca_media", 0.0)
+                
+                # Formatar delta text
+                if paineis_count > 0:
+                    delta_text = f"{paineis_count:,} painéis (conf: {int(confianca * 100)}%)"
+                
+                col2.metric(
+                    "☀️ MMGD Detectada",
+                    format_mw(potencia_mw, decimals=1),
+                    delta=delta_text,
+                    help="Potência de painéis solares detectados por IA"
+                )
+            else:
+                col2.metric(
+                    "☀️ MMGD Detectada",
+                    "0.0 MW",
+                    help="Potência de painéis solares detectados por IA"
+                )
+        else:
+            # Sem distribuidora selecionada
+            col2.metric(
+                "☀️ MMGD Detectada",
+                "0.0 MW",
+                help="Potência de painéis solares detectados por IA"
+            )
+    except Exception as e:
+        # Fallback: mostrar 0 com log do erro
+        import logging
+        logging.error(f"Erro ao buscar MMGD detectada: {e}")
+        col2.metric(
+            "☀️ MMGD Detectada",
+            "0.0 MW",
+            help="Potência de painéis solares detectados por IA"
+        )
+    
+    # Calcular potência instalada estimada com base no pico solar
+    # Assumindo que o pico solar representa ~85% da capacidade instalada em condições ideais
+    potencia_instalada_estimada = pico_solar_dia / 0.85 if pico_solar_dia > 0 else 0
+    
     col3.metric(
-        "🔌 Consumo Real (Estimado)",
-        format_mw(consumo_real_atual, decimals=0),
-        help="Demanda total = Carga Líquida + MMGD"
+        "⚡ Capacidade MMGD (Estimada)",
+        format_mw(potencia_instalada_estimada, decimals=0),
+        help="Capacidade instalada estimada de MMGD baseada no pico solar do dia"
     )
     col4.metric(
         f"☀️ Pico Solar (às {hora_pico})",
@@ -136,19 +305,17 @@ def render_carga_section(
         O ONS só "vê" 70 MW, mas o consumo real é 100 MW.
         """)
 
-    # ===== GRÁFICO COMPARATIVO =====
-    fig = go.Figure()
+    # ===== GRÁFICO 1: CARGA LÍQUIDA VS CONSUMO REAL (LINHAS SIMPLES) =====
+    fig1 = go.Figure()
 
-    # Trace 1: Carga Líquida ONS (azul escuro, área preenchida)
-    fig.add_trace(
+    # Trace 1: Carga Líquida ONS
+    fig1.add_trace(
         go.Scatter(
             x=df_carga["hora"],
             y=df_carga["carga_ons"],
             mode="lines",
             name="Carga Líquida (ONS)",
-            line=dict(color="#1e3a8a", width=3),  # Azul escuro
-            fill="tozeroy",
-            fillcolor="rgba(30, 58, 138, 0.3)",
+            line={"color": "#1e3a8a", "width": 3},
             hovertemplate=(
                 "<b>Carga Líquida (ONS)</b><br>"
                 "Hora: %{x}<br>"
@@ -158,34 +325,14 @@ def render_carga_section(
         )
     )
 
-    # Trace 2: Geração MMGD (amarelo, área preenchida acima da carga líquida)
-    fig.add_trace(
+    # Trace 2: Consumo Real (linha superior)
+    fig1.add_trace(
         go.Scatter(
             x=df_carga["hora"],
             y=df_carga["carga_real_estimada"],
-            mode="none",
-            name="Geração MMGD",
-            fill="tonexty",  # Preenche entre carga_ons e carga_real
-            fillcolor="rgba(250, 204, 21, 0.5)",  # Amarelo translúcido
-            hovertemplate=(
-                "<b>Geração MMGD</b><br>"
-                "Hora: %{x}<br>"
-                "Geração: %{customdata:.0f} MW<br>"
-                "<extra></extra>"
-            ),
-            customdata=df_carga["estimativa_solar_mw"]
-        )
-    )
-
-    # Trace 3: Linha do Consumo Real (verde, borda superior)
-    fig.add_trace(
-        go.Scatter(
-            x=df_carga["hora"],
-            y=df_carga["carga_real_estimada"],
-            mode="lines+markers",
+            mode="lines",
             name="Consumo Real (Estimado)",
-            line=dict(color="#16a34a", width=3, dash="solid"),  # Verde
-            marker=dict(size=5, color="#16a34a"),
+            line={"color": "#16a34a", "width": 3},
             hovertemplate=(
                 "<b>Consumo Real</b><br>"
                 "Hora: %{x}<br>"
@@ -195,15 +342,15 @@ def render_carga_section(
         )
     )
 
-    # Trace 4 (opcional): Carga Auditada com fraudes
+    # Trace 3 (opcional): Carga Auditada com fraudes
     if impacto_projecao_mw > 0 and "carga_auditada" in df_carga.columns:
-        fig.add_trace(
+        fig1.add_trace(
             go.Scatter(
                 x=df_carga["hora"],
                 y=df_carga["carga_auditada"],
                 mode="lines",
                 name=f"Cenário com Fraudes ({multiplicador}x)",
-                line=dict(color="#dc2626", width=2, dash="dash"),  # Vermelho
+                line={"color": "#dc2626", "width": 2, "dash": "dash"},
                 hovertemplate=(
                     "<b>Cenário com Fraudes</b><br>"
                     "Hora: %{x}<br>"
@@ -213,45 +360,186 @@ def render_carga_section(
             )
         )
 
-    # Layout do gráfico
-    fig.update_layout(
-        title={
-            "text": "Comparativo: Carga Líquida vs Consumo Real",
-            "x": 0.5,
-            "xanchor": "center"
-        },
+    fig1.update_layout(
+        title={"text": "Comparativo: Carga Líquida vs Consumo Real", "x": 0.5, "xanchor": "center"},
         xaxis_title="Data/Hora",
         yaxis_title="Potência Média (MW)",
         template="plotly_dark",
         hovermode="x unified",
-        height=500,
+        height=400,
         showlegend=True,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=-0.25,
-            xanchor="center",
-            x=0.5
-        ),
+        legend={"orientation": "h", "yanchor": "bottom", "y": -0.2, "xanchor": "center", "x": 0.5},
         separators=",.",
-        yaxis=dict(
-            ticksuffix=" MW",
-            rangemode="tozero"
-        )
+        yaxis={"ticksuffix": " MW", "rangemode": "tozero"}
     )
 
-    apply_plotly_locale(fig)
-    st.plotly_chart(fig, use_container_width=True)
+    apply_plotly_locale(fig1)
+    st.plotly_chart(fig1, use_container_width=True)
 
-    # ===== LEGENDA VISUAL EXPLICATIVA =====
-    st.markdown("""
-    **Legenda do Gráfico:**
-    - 🔵 **Área Azul**: Carga Líquida (o que o sistema de transmissão fornece)
-    - 🟡 **Área Amarela**: Geração MMGD (energia gerada e consumida localmente)
-    - 🟢 **Linha Verde**: Consumo Real Total (Carga Líquida + MMGD)
+    # ===== GRÁFICO 2: DISTRIBUIÇÃO POR CLASSE (BARRAS EMPILHADAS) =====
+    
+    # ===== GRÁFICO 2: SÉRIE TEMPORAL - CARGA DISTRIBUIDORA REAL =====
+    if "carga_distribuidora_horaria" in df_carga.attrs:
+        df_dist = df_carga.attrs["carga_distribuidora_horaria"]
+        if not df_dist.empty:
+            df_dist_sorted = df_dist.sort_values("data_medicao")
+            
+            fig2 = go.Figure()
+            
+            # Linha de carga líquida (medida real)
+            fig2.add_trace(
+                go.Scatter(
+                    x=df_dist_sorted["data_medicao"],
+                    y=df_dist_sorted["carga_liquida_mw"],
+                    mode="lines",
+                    name="Carga Líquida (Real)",
+                    line=dict(color="#3b82f6", width=2),
+                    hovertemplate=(
+                        "<b>Carga Líquida</b><br>"
+                        "Hora: %{x|%d/%m %H:%M}<br>"
+                        "Carga: %{y:.2f} MW<br>"
+                        "<extra></extra>"
+                    )
+                )
+            )
+            
+            # Linha de carga estimada total (com MMGD)
+            fig2.add_trace(
+                go.Scatter(
+                    x=df_dist_sorted["data_medicao"],
+                    y=df_dist_sorted["carga_estimada_total_mw"],
+                    mode="lines",
+                    name="Carga Total Estimada",
+                    line=dict(color="#10b981", width=2, dash="dash"),
+                    hovertemplate=(
+                        "<b>Carga Total Estimada</b><br>"
+                        "Hora: %{x|%d/%m %H:%M}<br>"
+                        "Carga: %{y:.2f} MW<br>"
+                        "<extra></extra>"
+                    )
+                )
+            )
+            
+            # Adicionar dados do ONS se disponíveis
+            if "carga_ons_realtime" in df_carga.attrs:
+                df_ons = df_carga.attrs["carga_ons_realtime"]
+                if not df_ons.empty:
+                    # Agrupar por data_medicao para sumarizar todos os subsistemas
+                    df_ons_resumo = df_ons.groupby("data_medicao")["carga_mw"].sum().reset_index()
+                    df_ons_resumo = df_ons_resumo.sort_values("data_medicao")
+                    
+                    fig2.add_trace(
+                        go.Scatter(
+                            x=df_ons_resumo["data_medicao"],
+                            y=df_ons_resumo["carga_mw"],
+                            mode="lines",
+                            name="Carga Total ONS (SIN)",
+                            line=dict(color="#f59e0b", width=2, dash="dot"),
+                            hovertemplate=(
+                                "<b>Carga ONS (SIN)</b><br>"
+                                "Hora: %{x|%d/%m %H:%M}<br>"
+                                "Carga: %{y:.2f} MW<br>"
+                                "<extra></extra>"
+                            )
+                        )
+                    )
+            
+            fig2.update_layout(
+                title={"text": "Série Temporal de Carga: Distribuidora vs ONS (SIN)", "x": 0.5, "xanchor": "center"},
+                xaxis_title="Data/Hora",
+                yaxis_title="Carga (MW)",
+                template="plotly_dark",
+                hovermode="x unified",
+                height=400,
+                showlegend=True,
+                legend={"orientation": "h", "yanchor": "bottom", "y": -0.2, "xanchor": "center", "x": 0.5},
+                yaxis={"ticksuffix": " MW", "rangemode": "tozero"}
+            )
+            
+            apply_plotly_locale(fig2)
+            st.plotly_chart(fig2, use_container_width=True)
 
-    A área amarela representa a "carga oculta" - energia que os consumidores usam mas o ONS não vê.
-    """)
+
+    # ===== GRÁFICO 3: CURVA DE PATO =====
+    if "curva_pato" in df_carga.attrs:
+        df_pato = df_carga.attrs["curva_pato"]
+        if not df_pato.empty:
+            fig3 = go.Figure()
+            
+            # Converter hora para número para plotagem
+            df_pato['hora_num'] = df_pato['hora'].str[:2].astype(int)
+            
+            # Área entre min e max (envelope)
+            fig3.add_trace(
+                go.Scatter(
+                    x=df_pato['hora_num'],
+                    y=df_pato['carga_maxima_mw'],
+                    mode='lines',
+                    name='Máxima',
+                    line=dict(color='rgba(239, 68, 68, 0)'),
+                    showlegend=False
+                )
+            )
+            
+            fig3.add_trace(
+                go.Scatter(
+                    x=df_pato['hora_num'],
+                    y=df_pato['carga_minima_mw'],
+                    mode='lines',
+                    name='Mínima',
+                    line=dict(color='rgba(239, 68, 68, 0)'),
+                    fillcolor='rgba(239, 68, 68, 0.2)',
+                    fill='tonexty',
+                    showlegend=False
+                )
+            )
+            
+            # Linha de carga média (principal)
+            fig3.add_trace(
+                go.Scatter(
+                    x=df_pato['hora_num'],
+                    y=df_pato['carga_media_mw'],
+                    mode='lines+markers',
+                    name='Carga Média',
+                    line=dict(color='#3b82f6', width=3),
+                    marker=dict(size=6),
+                    fill='tozeroy',
+                    fillcolor='rgba(59, 130, 246, 0.2)',
+                    hovertemplate=(
+                        "<b>Hora</b>: %{x:02d}:00<br>"
+                        "<b>Carga Média</b>: %{y:.2f} MW<br>"
+                        "<extra></extra>"
+                    )
+                )
+            )
+            
+            fig3.update_layout(
+                title={"text": "Curva de Pato - Padrão de Carga por Hora do Dia", "x": 0.5, "xanchor": "center"},
+                xaxis_title="Hora do Dia",
+                yaxis_title="Carga (MW)",
+                template="plotly_dark",
+                hovermode="x unified",
+                height=400,
+                xaxis=dict(
+                    tickmode='linear',
+                    tick0=0,
+                    dtick=1,
+                    tickformat='02d'
+                ),
+                yaxis={"ticksuffix": " MW", "rangemode": "tozero"},
+                annotations=[
+                    dict(
+                        text="Agrupa dados dos últimos 30 dias para mostrar padrão típico de demanda",
+                        xref="paper", yref="paper",
+                        x=0.5, y=-0.15,
+                        showarrow=False,
+                        font=dict(size=10, color="gray")
+                    )
+                ]
+            )
+            
+            apply_plotly_locale(fig3)
+            st.plotly_chart(fig3, use_container_width=True)
 
 
 def render_classes_consumo(client: ApiClient, distribuidora: str) -> None:
@@ -266,6 +554,12 @@ def render_classes_consumo(client: ApiClient, distribuidora: str) -> None:
     df_classes = pd.DataFrame(result.data)
     if df_classes.empty:
         return
+    
+    # Sanitizar tipos de dados
+    if "mw" in df_classes.columns:
+        df_classes["mw"] = pd.to_numeric(df_classes["mw"], errors="coerce").fillna(0.0).astype(float)
+    if "classe" in df_classes.columns:
+        df_classes["classe"] = df_classes["classe"].fillna("").astype(str)
 
     st.markdown("---")
     st.header("Detalhamento da Distribuidora")
@@ -299,12 +593,22 @@ def render_estabelecimentos_section(client: ApiClient, distribuidora: str) -> No
 
     # Métricas principais
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Instalações MMGD", format_integer(resumo['total_instalacoes']))
-    col2.metric("Unidades Consumidoras (UC)", format_integer(resumo['total_unidades_consumidoras']))
-    col3.metric("Potência Total", format_mw(resumo['total_mw'], decimals=0))
-    col4.metric("Média por UC", format_kw(resumo['total_mw'] / resumo['total_unidades_consumidoras'] * 1000, decimals=1))
+    col1.metric("Total Instalações MMGD", format_integer(resumo.get('total_instalacoes', 0)))
+    col2.metric("Unidades Consumidoras (UC)", format_integer(resumo.get('total_unidades_consumidoras', 0)))
+    col3.metric("Potência Total", format_mw(resumo.get('total_mw', 0), decimals=0))
+    total_uc = resumo.get('total_unidades_consumidoras', 1)
+    total_mw = resumo.get('total_mw', 0)
+    col4.metric("Média por UC", format_kw((total_mw / total_uc * 1000) if total_uc > 0 else 0, decimals=1))
 
     df_contagens = pd.DataFrame(contagens)
+    
+    # Sanitizar tipos de dados
+    numeric_cols = ["quantidade", "total_unidades", "total_mw"]
+    for col in numeric_cols:
+        if col in df_contagens.columns:
+            df_contagens[col] = pd.to_numeric(df_contagens[col], errors="coerce").fillna(0.0).astype(float)
+    if "tipo" in df_contagens.columns:
+        df_contagens["tipo"] = df_contagens["tipo"].fillna("").astype(str)
 
     # Mapear labels
     tipo_labels = {
@@ -531,6 +835,12 @@ def render_classes_consumo_compact(client: ApiClient, distribuidora: str) -> Non
     if df_classes.empty:
         st.info("Sem dados de classes disponíveis")
         return
+    
+    # Sanitizar tipos de dados
+    if "mw" in df_classes.columns:
+        df_classes["mw"] = pd.to_numeric(df_classes["mw"], errors="coerce").fillna(0.0).astype(float)
+    if "classe" in df_classes.columns:
+        df_classes["classe"] = df_classes["classe"].fillna("").astype(str)
 
     # Gráfico de pizza (maior destaque)
     fig_pie = px.pie(
@@ -578,16 +888,24 @@ def render_estabelecimentos_compact(client: ApiClient, distribuidora: str) -> No
     col1, col2 = st.columns(2)
     col1.metric(
         "Total Instalações",
-        format_integer(resumo['total_instalacoes']),
+        format_integer(resumo.get('total_instalacoes', 0)),
         help="Número total de instalações MMGD"
     )
     col2.metric(
         "Potência Total",
-        format_mw(resumo['total_mw'], decimals=0),
+        format_mw(resumo.get('total_mw', 0), decimals=0),
         help="Capacidade instalada total"
     )
 
     df_contagens = pd.DataFrame(contagens)
+    
+    # Sanitizar tipos de dados
+    numeric_cols = ["quantidade", "total_unidades", "total_mw"]
+    for col in numeric_cols:
+        if col in df_contagens.columns:
+            df_contagens[col] = pd.to_numeric(df_contagens[col], errors="coerce").fillna(0.0).astype(float)
+    if "tipo" in df_contagens.columns:
+        df_contagens["tipo"] = df_contagens["tipo"].fillna("").astype(str)
 
     # Mapear labels
     tipo_labels = {

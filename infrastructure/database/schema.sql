@@ -75,31 +75,45 @@ $$ LANGUAGE plpgsql;
 -- PARTE 1: DADOS ANEEL - TRANSFORMADORES E SUBESTAÇÕES
 -- ============================================================================
 
+-- Tabela de Transformadores ANEEL (BDGD)
+CREATE SEQUENCE IF NOT EXISTS transformadores_aneel_id_seq;
+
 CREATE TABLE IF NOT EXISTS transformadores_aneel (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY DEFAULT nextval('transformadores_aneel_id_seq'),
     codigo VARCHAR(100) UNIQUE NOT NULL,
     nome VARCHAR(255),
     subestacao_id INTEGER,
     subestacao_codigo VARCHAR(100),
     tensao_primaria_kv NUMERIC(10,2),
+    tensao_secundaria_kv NUMERIC(10,2),
     tensao_secundaria_v NUMERIC(10,2),
     potencia_nominal_kva NUMERIC(10,2),
+    potencia_kva NUMERIC(10,2),
     impedancia_percentual NUMERIC(10,2),
+    tipo_tensao VARCHAR(10),
     latitude DECIMAL(10, 7),
     longitude DECIMAL(11, 7),
     geom GEOMETRY(Point, 4326),
-    distribuidora VARCHAR(100),
+    distribuidora VARCHAR(255),
     dist_codigo VARCHAR(50),
     status VARCHAR(50) DEFAULT 'ativo',
     fonte_dados VARCHAR(50) DEFAULT 'ANEEL',
     data_importacao TIMESTAMP DEFAULT NOW(),
+    data_criacao TIMESTAMP DEFAULT NOW(),
+    data_atualizacao TIMESTAMP DEFAULT NOW(),
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
     ativo BOOLEAN DEFAULT TRUE
 );
 
+-- Garantir que a sequência pertence à coluna
+ALTER SEQUENCE transformadores_aneel_id_seq OWNED BY transformadores_aneel.id;
+
+-- Tabela de Subestações ANEEL (BDGD)
+CREATE SEQUENCE IF NOT EXISTS subestacoes_aneel_id_seq;
+
 CREATE TABLE IF NOT EXISTS subestacoes_aneel (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY DEFAULT nextval('subestacoes_aneel_id_seq'),
     codigo VARCHAR(100) UNIQUE,
     nome VARCHAR(255) NOT NULL,
     latitude DECIMAL(10, 7),
@@ -109,13 +123,16 @@ CREATE TABLE IF NOT EXISTS subestacoes_aneel (
     tensao_kv NUMERIC(10,2),
     tensao_operacao_kv NUMERIC(10,2),
     codigo_ons VARCHAR(50),
-    distribuidora VARCHAR(100),
+    distribuidora VARCHAR(255),
     dist_codigo VARCHAR(50),
     ativo BOOLEAN DEFAULT TRUE,
     data_criacao TIMESTAMP DEFAULT NOW(),
     data_atualizacao TIMESTAMP DEFAULT NOW(),
     fonte_dados VARCHAR(50) DEFAULT 'ANEEL'
 );
+
+-- Garantir que a sequência pertence à coluna
+ALTER SEQUENCE subestacoes_aneel_id_seq OWNED BY subestacoes_aneel.id;
 
 CREATE TABLE IF NOT EXISTS aneel_bdgd_processamento (
     id SERIAL PRIMARY KEY,
@@ -170,6 +187,7 @@ CREATE TABLE IF NOT EXISTS geracao_mmgd (
 CREATE TABLE IF NOT EXISTS geracao_mmgd_distribuidora (
     id BIGSERIAL PRIMARY KEY,
     distribuidora TEXT NOT NULL,
+    distribuidora_normalizada TEXT,
     subsistema TEXT,
     subestacao TEXT,
     fonte_geracao TEXT,  -- 'Solar', 'Eólica', 'Hidro', 'Biomassa', etc
@@ -185,17 +203,45 @@ CREATE TABLE IF NOT EXISTS geracao_mmgd_distribuidora (
 CREATE INDEX IF NOT EXISTS idx_geracao_mmgd_distribuidora_name 
 ON geracao_mmgd_distribuidora(distribuidora);
 
+CREATE INDEX IF NOT EXISTS idx_geracao_mmgd_distribuidora_normalized
+ON geracao_mmgd_distribuidora(distribuidora_normalizada);
+
 CREATE INDEX IF NOT EXISTS idx_geracao_mmgd_distribuidora_subsistema
 ON geracao_mmgd_distribuidora(subsistema);
 
 CREATE INDEX IF NOT EXISTS idx_geracao_mmgd_distribuidora_subestacao
 ON geracao_mmgd_distribuidora(subestacao);
 
+-- Tabela de GD Granular (dados detalhados por estabelecimento MMGD)
+CREATE TABLE IF NOT EXISTS gd_granular (
+    id BIGSERIAL PRIMARY KEY,
+    distribuidora TEXT NOT NULL,
+    distribuidora_normalizada TEXT,
+    classe_consumo TEXT,
+    tipo_consumidor VARCHAR(10),
+    subgrupo_tarifario TEXT,
+    qtd_unidades INT DEFAULT 1,
+    sigla_uf VARCHAR(2),
+    fonte_geracao TEXT,
+    potencia_kw FLOAT8,
+    tipo_estabelecimento TEXT,
+    data_insercao TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_gd_granular_distribuidora 
+ON gd_granular(distribuidora);
+
+CREATE INDEX IF NOT EXISTS idx_gd_granular_distribuidora_normalized
+ON gd_granular(distribuidora_normalizada);
+
+CREATE INDEX IF NOT EXISTS idx_gd_granular_tipo_estabelecimento
+ON gd_granular(tipo_estabelecimento);
+
 CREATE TABLE IF NOT EXISTS consumidor (
     id SERIAL PRIMARY KEY,
     codigo_cliente VARCHAR(50) UNIQUE,
     transformador_id INTEGER,
-    distribuidora VARCHAR(100),
+    distribuidora VARCHAR(255),
     classe_consumo VARCHAR(50),
     consumo_kwh NUMERIC,
     data_referencia DATE,
@@ -247,11 +293,12 @@ CREATE TABLE IF NOT EXISTS perfis_carga_classe (
 
 CREATE TABLE IF NOT EXISTS consumo_granular_classe (
     id SERIAL PRIMARY KEY,
-    distribuidora VARCHAR(100),
+    distribuidora VARCHAR(255),
     classe_consumo VARCHAR(50),
     consumo_kwh NUMERIC,
-    data_referencia DATE,
-    created_at TIMESTAMP DEFAULT NOW()
+    data_medicao TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(distribuidora, classe_consumo, data_medicao)
 );
 
 CREATE TABLE IF NOT EXISTS mmgd_subsistema (
@@ -273,7 +320,7 @@ CREATE TABLE IF NOT EXISTS calibracao_parametros (
 CREATE TABLE IF NOT EXISTS cargas_calculadas (
     id SERIAL PRIMARY KEY,
     subsistema VARCHAR(50),
-    distribuidora VARCHAR(100),
+    distribuidora VARCHAR(255),
     carga_calculada_mw NUMERIC,
     timestamp_calculo TIMESTAMP NOT NULL DEFAULT NOW(),
     created_at TIMESTAMP DEFAULT NOW()
@@ -441,7 +488,7 @@ CREATE OR REPLACE FUNCTION aneel_atualizar_geometria_transformadores()
 RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.latitude IS NOT NULL AND NEW.longitude IS NOT NULL THEN
-        NEW.localizacao := ST_SetSRID(ST_MakePoint(NEW.longitude, NEW.latitude), 4326);
+        NEW.geom := ST_SetSRID(ST_MakePoint(NEW.longitude, NEW.latitude), 4326);
     END IF;
     NEW.data_atualizacao := NOW();
     RETURN NEW;
@@ -457,6 +504,7 @@ CREATE OR REPLACE FUNCTION aneel_atualizar_geometria_subestacoes()
 RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.latitude IS NOT NULL AND NEW.longitude IS NOT NULL THEN
+        NEW.geom := ST_SetSRID(ST_MakePoint(NEW.longitude, NEW.latitude), 4326);
         NEW.localizacao := ST_SetSRID(ST_MakePoint(NEW.longitude, NEW.latitude), 4326);
     END IF;
     NEW.data_atualizacao := NOW();
@@ -656,21 +704,145 @@ ON CONFLICT (subsistema) DO UPDATE SET
     data_atualizacao = NOW();
 
 -- ============================================================================
+-- PARTE 10: CARGA DAS DISTRIBUIDORAS (TEMPO REAL)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS carga_distribuidoras (
+    id SERIAL PRIMARY KEY,
+    distribuidora VARCHAR(255) NOT NULL,
+    subsistema VARCHAR(50),
+    carga_liquida_mw FLOAT NOT NULL,
+    carga_estimada_total_mw FLOAT,
+    data_medicao TIMESTAMP NOT NULL,
+    data_insercao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(distribuidora, data_medicao)
+);
+
+CREATE INDEX IF NOT EXISTS idx_carga_dist_data 
+    ON carga_distribuidoras(distribuidora, data_medicao DESC);
+
+CREATE INDEX IF NOT EXISTS idx_carga_dist_subsistema 
+    ON carga_distribuidoras(subsistema, data_medicao DESC);
+
+-- ============================================================================
+-- PARTE 11: CARGA DO ONS - DADOS REAIS EM TEMPO REAL
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS carga_ons_realtime (
+    id SERIAL PRIMARY KEY,
+    data_medicao TIMESTAMP NOT NULL,
+    subsistema VARCHAR(50) NOT NULL,
+    distribuidora VARCHAR(255),
+    carga_mw FLOAT NOT NULL,
+    percentual FLOAT,
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(data_medicao, subsistema, distribuidora)
+);
+
+CREATE INDEX IF NOT EXISTS idx_carga_ons_data 
+    ON carga_ons_realtime(data_medicao DESC);
+
+CREATE INDEX IF NOT EXISTS idx_carga_ons_subsistema 
+    ON carga_ons_realtime(subsistema, data_medicao DESC);
+
+CREATE INDEX IF NOT EXISTS idx_carga_ons_distribuidora 
+    ON carga_ons_realtime(distribuidora, data_medicao DESC);
+
+-- ============================================================================
+-- PARTE 12: DISTRIBUIDORAS ANEEL - CADASTRO
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS distribuidoras_aneel (
+    id SERIAL PRIMARY KEY,
+    nome VARCHAR(255) NOT NULL UNIQUE,
+    sigla VARCHAR(50),
+    regiao VARCHAR(50),
+    subsistema VARCHAR(50),
+    potencia_total_kva FLOAT,
+    total_transformadores INTEGER DEFAULT 0,
+    total_subestacoes INTEGER DEFAULT 0,
+    total_consumidores INTEGER DEFAULT 0,
+    data_carregamento TIMESTAMP,
+    ativo BOOLEAN DEFAULT TRUE,
+    data_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_dist_aneel_nome 
+    ON distribuidoras_aneel(nome);
+
+CREATE INDEX IF NOT EXISTS idx_dist_aneel_regiao 
+    ON distribuidoras_aneel(regiao, ativo);
+
+CREATE INDEX IF NOT EXISTS idx_dist_aneel_subsistema 
+    ON distribuidoras_aneel(subsistema, ativo);
+
+INSERT INTO distribuidoras_aneel (nome, sigla, regiao, subsistema, potencia_total_kva, ativo)
+VALUES
+    ('LIGHT', 'LIGHT', 'Sudeste', 'SUDESTE', 25000000, TRUE),
+    ('ENEL', 'ENEL', 'Sudeste', 'SUDESTE', 28000000, TRUE),
+    ('CPFL', 'CPFL', 'Sudeste', 'SUDESTE', 22000000, TRUE),
+    ('ELEKTRO', 'ELEKTRO', 'Sudeste', 'SUDESTE', 18000000, TRUE),
+    ('CEMIG', 'CEMIG', 'Sudeste', 'SUDESTE', 35000000, TRUE),
+    ('AES', 'AES', 'Sul', 'SUL', 15000000, TRUE),
+    ('COPEL', 'COPEL', 'Sul', 'SUL', 32000000, TRUE),
+    ('RGE', 'RGE', 'Sul', 'SUL', 12000000, TRUE),
+    ('NEOENERGIA', 'NEOENERGIA', 'Nordeste', 'NORDESTE', 20000000, TRUE),
+    ('EQUATORIAL', 'EQUATORIAL', 'Nordeste', 'NORDESTE', 18000000, TRUE),
+    ('COSERN', 'COSERN', 'Nordeste', 'NORDESTE', 10000000, TRUE),
+    ('AMPERE', 'AMPERE', 'Norte', 'NORTE', 8000000, TRUE)
+ON CONFLICT (nome) DO NOTHING;
+
+-- ============================================================================
+-- ALTERAÇÕES EM TABELAS EXISTENTES (Backward Compatibility)
+-- ============================================================================
+
+-- Garantir que gd_granular tem coluna distribuidora_normalizada
+ALTER TABLE IF EXISTS gd_granular 
+ADD COLUMN IF NOT EXISTS distribuidora_normalizada TEXT;
+
+-- ============================================================================
+-- STORED PROCEDURES
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION sp_calcular_area_transformadores(
+    p_tipo_tensao VARCHAR,
+    p_distribuidora VARCHAR,
+    p_apenas_ativos BOOLEAN DEFAULT FALSE
+)
+RETURNS TABLE(
+    transformador_id INTEGER,
+    area_m2 NUMERIC,
+    total_consumidores INTEGER
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        t.id,
+        COALESCE(ST_Area(tc.area_cobertura)::NUMERIC, 0) as area_m2,
+        tc.total_consumidores
+    FROM transformadores_aneel t
+    LEFT JOIN transformador_area_cobertura tc ON t.id = tc.transformador_id
+    WHERE (p_tipo_tensao IS NULL OR t.tipo_tensao = p_tipo_tensao)
+        AND (p_distribuidora IS NULL OR t.distribuidora = p_distribuidora)
+        AND (NOT p_apenas_ativos OR t.ativo = TRUE);
+END;
+$$ LANGUAGE plpgsql;
+
+-- ============================================================================
 -- RESUMO FINAL
 -- ============================================================================
 
--- Verificação de criação bem-sucedida
 SELECT 
-    'Schema Unificado criado com sucesso!' as status,
-    NOW() as data_execucao;
+        'Schema Unificado criado com sucesso!' as status,
+        NOW() as data_execucao;
 
--- Contagem de tabelas criadas
 SELECT 
-    'Total de tabelas criadas:' as info,
-    COUNT(*) as total
+        'Total de tabelas criadas:' as info,
+        COUNT(*) as total
 FROM information_schema.tables 
 WHERE table_schema = 'public'
-  AND table_type = 'BASE TABLE';
+    AND table_type = 'BASE TABLE';
 
 -- ============================================================================
 -- FIM DO SCHEMA UNIFICADO

@@ -88,10 +88,26 @@ docker-compose exec etl python src/extractors/aneel_gd_mmgd_client.py
 docker-compose exec etl python src/extractors/inpe_weather_client.py
 docker-compose exec etl python src/fix_data.py
 
-docker-compose exec etl python src/extractors/bdgd_client.py
+# docker-compose exec etl python src/extractors/bdgd_client.py
 
 # Rodar a ETL para buscar últimos 30 dias por distribuidora e subestação
 docker compose exec etl python src/extractors/aneel_mmgd.py
+
+docker-compose exec -T etl python src/extractors/ons_real_time_etl.py --fill-day 2026-02-06
+
+# Testar fontes alternativas (contorna erros 403 da API oficial)
+# Opcoes: auto (padrao), referencia (API), energia-agora (endpoints), ftp
+docker-compose exec -T etl python src/extractors/ons_real_time_etl.py --source energia-agora
+docker-compose exec -T etl python src/extractors/ons_real_time_etl.py --source ftp
+
+# Preencher dia inteiro (fallback para API referencia se Energia Agora nao tem historico)
+docker-compose exec -T etl python src/extractors/ons_real_time_etl.py --fill-day 2026-02-06
+
+# Auto: tenta ambas as fontes
+docker-compose exec -T etl python src/extractors/ons_real_time_etl.py
+
+# Dados de Carga liquida e estimada ONS
+
 
 # ETL com dados reais (ONS + ANEEL SIGA + OpenStreetMap)
 # docker-compose exec etl python src/extractors/area_cobertura_real.py --completo
@@ -116,6 +132,15 @@ docker compose exec -T etl python /app/src/extractors/aneel_bdgd_local/etl_aneel
 # Com debug (mostra detalhes de processamento)
 docker compose exec -T etl python /app/src/extractors/aneel_bdgd_local/etl_aneel_bdgd_local.py --debug
 ```
+
+# ⚠️ IMPORTANTE: Executar nesta ordem para preencher carga_estimada_total_mw (carga granular)
+
+# 1️⃣ Primeiro: Preencher consumo granular por classe (base para cálculo de carga total)
+docker-compose exec -T etl python /app/src/extractors/consumo_granular_classe_etl.py
+
+# 2️⃣ Depois: Calcular carga das distribuidoras (usa dados do passo anterior)
+docker-compose exec -T etl python /app/src/extractors/distribuidor_carga_etl.py
+
 
 
 # ETL AUTOMATICA PARA DADOS BDGD AUTOMATICOS
@@ -385,6 +410,7 @@ Para documentação completa, consulte a pasta **[docs/](docs/)**:
 - **[docs/IMPLEMENTACAO_COMPLETA.md](docs/IMPLEMENTACAO_COMPLETA.md)** - Resumo executivo do projeto
 - **[docs/SUBESTACOES_README.md](docs/SUBESTACOES_README.md)** - Detalhes sobre clustering de subestações
 - **[docs/ETL_DIAGNOSTICO.md](docs/ETL_DIAGNOSTICO.md)** - Pipeline ETL e fontes de dados
+- **[SOLUCAO_DADOS_REAIS_ONS.md](SOLUCAO_DADOS_REAIS_ONS.md)** - Fontes de dados ONS e fallback
 
 ## 🔍 Recursos Avançados
 
