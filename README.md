@@ -90,6 +90,9 @@ docker-compose exec etl python src/fix_data.py
 
 docker-compose exec etl python src/extractors/bdgd_client.py
 
+# Rodar a ETL para buscar últimos 30 dias por distribuidora e subestação
+docker compose exec etl python src/extractors/aneel_mmgd.py
+
 # ETL com dados reais (ONS + ANEEL SIGA + OpenStreetMap)
 # docker-compose exec etl python src/extractors/area_cobertura_real.py --completo
 

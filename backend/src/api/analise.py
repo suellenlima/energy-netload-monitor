@@ -41,6 +41,24 @@ def get_repository(engine=Depends(get_engine)):
     return AnaliseRepositorySQLAlchemy(engine)
 
 
+@router.get("/distribuidoras", response_model=list[str])
+def listar_distribuidoras_disponiveis(
+    repo=Depends(get_repository),
+):
+    """
+    Lista todas as distribuidoras com dados REAIS de MMGD na base.
+    
+    Útil para validação e autocomplete no frontend.
+    Retorna nomes normalizados em UPPERCASE.
+    """
+    try:
+        distribuidoras = repo.obter_distribuidoras_disponiveis()
+        return distribuidoras
+    except Exception as exc:
+        logger.error(f"Erro ao listar distribuidoras: {exc}", exc_info=True)
+        return []
+
+
 @router.get("/carga-oculta", response_model=list[CargaOcultaItem])
 def calcular_carga_oculta(
     subsistema: SubsistemaQuery = "SUDESTE",
@@ -211,6 +229,47 @@ def obter_carga_distribuidora_tempo_real(
     except Exception as exc:
         logger.error(f"Erro ao obter carga distribuidor tempo real: {exc}", exc_info=True)
         raise DatabaseError("Falha ao obter carga em tempo real") from exc
+
+
+@router.get("/carga-distribuidor-historico")
+def obter_carga_distribuidor_historico(
+    distribuidora: DistribuidoraQuery,
+    subsistema: SubsistemaQuery = None,
+    dias: int = 7,
+    repo=Depends(get_repository),
+):
+    """
+    Obtém o histórico de carga por distribuidora.
+
+    Retorna os dados de carga armazenados na tabela carga_distribuidoras
+    para análise de tendências históricas.
+
+    **Parâmetros:**
+    - **distribuidora**: Nome da distribuidora (obrigatório)
+    - **subsistema**: Filtrar por subsistema (opcional)
+    - **dias**: Número de dias de histórico a retornar (padrão: 7)
+
+    **Resposta:**
+    ```json
+    [
+      {
+        "hora": "2026-02-05T22:00:00",
+        "carga_ons": 177.82,
+        "distribuidora": "LIGHT",
+        "subsistema": "Sudeste/Centro-Oeste"
+      }
+    ]
+    ```
+    """
+    try:
+        if not distribuidora:
+            raise ValueError("Distribuidora é obrigatória")
+        
+        return repo.obter_carga_distribuidor_historico(distribuidora, subsistema, dias)
+
+    except Exception as exc:
+        logger.error(f"Erro ao obter histórico de carga: {exc}", exc_info=True)
+        raise DatabaseError("Falha ao obter histórico de carga") from exc
 
 
 @router.get("/classes-consumo", response_model=list[ClasseConsumoItem])
