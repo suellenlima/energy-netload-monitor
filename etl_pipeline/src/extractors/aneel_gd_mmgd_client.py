@@ -17,23 +17,50 @@ GD_URL = (
 )
 
 
-def download_gd_csv(session, settings, path: Path, logger: logging.Logger) -> Path:
+def download_gd_csv(session, settings, path: Path, logger: logging.Logger, force_refresh: bool = False) -> Path:
+    """
+    Baixa CSV de GD da ANEEL com cache inteligente.
+    
+    Args:
+        session: Sessão requests
+        settings: Configurações
+        path: Caminho do arquivo
+        logger: Logger
+        force_refresh: Se True, ignora cache e baixa novamente
+        
+    Returns:
+        Caminho do arquivo baixado
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        logger.info("Usando cache: %s", path)
-        return path
+    
+    # Verificar se arquivo existe e é recente (menos de 30 dias)
+    if path.exists() and not force_refresh:
+        from datetime import datetime, timedelta
+        import os
+        
+        file_age = datetime.now() - datetime.fromtimestamp(os.path.getmtime(path))
+        if file_age < timedelta(days=30):
+            logger.info(f"✅ Usando cache: {path} (idade: {file_age.days} dias)")
+            return path
+        else:
+            logger.info(f"⚠️ Cache expirado ({file_age.days} dias). Atualizando...")
+            path.unlink()  # Deletar arquivo antigo
 
     tmp_path = path.with_suffix(path.suffix + ".partial")
-    logger.info("Baixando CSV de GD.")
-    response = request(session, "GET", GD_URL, settings=settings.http, logger=logger, stream=True)
-    response.raise_for_status()
-    with open(tmp_path, "wb") as handle:
-        for chunk in response.iter_content(chunk_size=1024 * 1024):
-            if chunk:
-                handle.write(chunk)
-    tmp_path.replace(path)
-    logger.info("Download concluido: %s", path)
-    return path
+    logger.info("📥 Baixando CSV de GD da ANEEL...")
+    try:
+        response = request(session, "GET", GD_URL, settings=settings.http, logger=logger, stream=True)
+        response.raise_for_status()
+        with open(tmp_path, "wb") as handle:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    handle.write(chunk)
+        tmp_path.replace(path)
+        logger.info(f"✅ Download concluído: {path}")
+        return path
+    except Exception as e:
+        logger.error(f"❌ Erro ao baixar: {e}")
+        raise
 
 
 def _clean_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -158,6 +185,7 @@ def transform_gd_granular(chunks: Iterable[pd.DataFrame], logger: logging.Logger
     Processa chunks SEM agregação, mantendo granularidade.
     Aplica classificação de tipo de estabelecimento.
     """
+    import re
     all_rows = []
     required_cols = [
         "NomAgente",
@@ -222,6 +250,17 @@ def transform_gd_granular(chunks: Iterable[pd.DataFrame], logger: logging.Logger
             "tipo_estabelecimento"
         ]
 
+        # Normalizar distribuidora
+        chunk_processed["distribuidora"] = chunk_processed["distribuidora"].str.upper().str.strip()
+        
+        # Coluna normalizada para buscas
+        def normalizar_nome(nome: str) -> str:
+            if pd.isna(nome):
+                return ""
+            return re.sub(r"[^A-Z0-9]", "", str(nome).upper())
+        
+        chunk_processed["distribuidora_normalizada"] = chunk_processed["distribuidora"].apply(normalizar_nome)
+
         all_rows.append(chunk_processed)
 
     return pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame()
@@ -260,8 +299,13 @@ def load_gd_granular(df: pd.DataFrame, engine, logger: logging.Logger) -> int:
     return total_loaded
 
 
-def run_extraction(session=None, engine=None, settings=None, logger=None) -> dict:
-    """Executa extração completa (agregada + granular)."""
+def run_extraction(session=None, engine=None, settings=None, logger=None, force_refresh: bool = False) -> dict:
+    """
+    Executa extração completa (agregada + granular).
+    
+    Args:
+        force_refresh: Se True, força download novo dos dados (ignora cache de 30 dias)
+    """
     logger = logger or logging.getLogger("etl.gd")
     if settings is None:
         settings = load_settings()
@@ -273,7 +317,7 @@ def run_extraction(session=None, engine=None, settings=None, logger=None) -> dic
     session = session or create_session(settings.http, logger=logger)
 
     raw_path = settings.paths.raw_dir / "gd_temp.csv"
-    path = download_gd_csv(session, settings, raw_path, logger)
+    path = download_gd_csv(session, settings, raw_path, logger, force_refresh=force_refresh)
 
     # Processar agregado (existente)
     logger.info("Processando dados agregados...")

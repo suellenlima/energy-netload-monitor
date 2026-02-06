@@ -3,6 +3,7 @@ Dashboard principal do sistema de Monitoramento de Carga Líquida.
 Reorganizado com tabs para melhor UX e redução de scroll.
 """
 
+import pandas as pd
 import streamlit as st
 
 from components.alerts import fetch_alerta, render_alerta
@@ -106,24 +107,25 @@ state = render_sidebar(client)
 dados_ia = fetch_alerta(client, state.distribuidora)
 _, impacto_projecao_mw = render_alerta(dados_ia, state.multiplicador)
 
-st.divider()
+# st.divider()
 
 # ==================== DASHBOARD PRINCIPAL ====================
 if state.refresh:
     # ==================== KPIs EXECUTIVOS (TOPO) ====================
+    st.caption(f"📅 {pd.Timestamp.now().strftime('%d de %B de %Y').replace('January', 'Janeiro').replace('February', 'Fevereiro').replace('March', 'Março').replace('April', 'Abril').replace('May', 'Maio').replace('June', 'Junho').replace('July', 'Julho').replace('August', 'Agosto').replace('September', 'Setembro').replace('October', 'Outubro').replace('November', 'Novembro').replace('December', 'Dezembro')}")
     kpis_data = render_executive_kpis(client, state.subsistema, state.distribuidora)
 
-    st.divider()
+    # st.divider()
 
     # ==================== BREADCRUMB ====================
     # Será atualizado dentro de cada tab
     breadcrumb_placeholder = st.empty()
 
     # ==================== TABS PRINCIPAIS ====================
-    tab_visao, tab_tempo, tab_subestacoes, tab_perfis, tab_auditoria = st.tabs([
+    tab_visao, tab_subestacoes, tab_tempo, tab_perfis, tab_auditoria = st.tabs([
         "📊 Visão Geral",
-        "⚡ Tempo Real",
         "🏭 Subestações",
+        "⚡ Tempo Real",
         "📈 Perfis & Análise",
         "🔍 Auditoria"
     ])
@@ -134,21 +136,21 @@ if state.refresh:
 
         # Análise de Carga (Líquida vs Real)
         df_carga = load_carga_data(client, state.subsistema, state.distribuidora)
-        render_carga_section(df_carga, impacto_projecao_mw, state.multiplicador, state.subsistema)
+        render_carga_section(df_carga, impacto_projecao_mw, state.multiplicador, state.subsistema, state.distribuidora, client)
 
         st.divider()
 
         # Classes de Consumo e Estabelecimentos lado a lado
-        st.markdown("#### 🏘️ Distribuição por Classes e Estabelecimentos")
+        st.markdown("#### 🏘️ Distribuição MENSAL por Classes e Estabelecimentos")
 
         col_classes, col_estab = st.columns(2)
 
         with col_classes:
-            st.markdown("##### Classes de Consumo")
+            st.markdown("##### MMGD (ANEEL) por Classes de Consumo")
             render_classes_consumo_compact(client, state.distribuidora)
 
         with col_estab:
-            st.markdown("##### Estabelecimentos")
+            st.markdown("##### MMGD (ANEEL) por Estabelecimentos")
             render_estabelecimentos_compact(client, state.distribuidora)
 
     # ==================== TAB 2: TEMPO REAL ====================

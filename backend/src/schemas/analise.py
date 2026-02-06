@@ -60,9 +60,37 @@ class CargaDistribuidoraAtual(BaseModel):
     """Carga atual em tempo real de uma distribuidora."""
 
     distribuidora: str = Field(..., description="Nome da distribuidora")
-    carga_mw: float = Field(..., description="Carga em MW", ge=0)
+    carga_granular_mw: float = Field(..., description="Carga Granular (medida) em MW", ge=0)
+    carga_liquida_mw: float = Field(..., description="Carga Líquida (ONS) em MW", ge=0)
+    carga_total_mw: float = Field(..., description="Carga Total = Granular + Líquida em MW", ge=0)
     data_medicao: datetime = Field(..., description="Timestamp da medição")
     subsistema: str | None = Field(None, description="Subsistema ONS")
+
+
+class EstimativasEstado(BaseModel):
+    """Estimativas de estado atual do sistema."""
+    
+    carga_ons_mw: float = Field(..., description="Carga ONS em MW", ge=0)
+    geracao_mmgd_mw: float = Field(..., description="Geração MMGD em MW", ge=0)
+    consumo_estimado_mw: float = Field(..., description="Consumo estimado em MW", ge=0)
+    irradiancia_atual_wm2: float = Field(..., description="Irradiância solar em W/m²", ge=0, le=1500)
+
+
+class EstadoAtual(BaseModel):
+    """Estado atual do sistema em tempo real."""
+    
+    timestamp: datetime = Field(..., description="Timestamp da estimativa")
+    hora_atual: int = Field(..., description="Hora atual (0-23)", ge=0, le=23)
+    estimativas: EstimativasEstado = Field(..., description="Estimativas de carga e geração")
+
+
+class CargaPorClasseItem(BaseModel):
+    """Série temporal de carga por classe de consumo."""
+
+    hora: datetime = Field(..., description="Timestamp da medição")
+    classe: str = Field(..., description="Classe de consumo (residencial, comercial, industrial, etc.)")
+    carga_mw: float = Field(..., description="Carga dessa classe em MW", ge=0)
+    percentual_classe: float = Field(..., description="Percentual dessa classe em relação ao total (%)", ge=0)
 
 
 class ClasseConsumoItem(BaseModel):
@@ -123,3 +151,45 @@ class PerfisResponse(BaseModel):
         default_factory=list,
         description="Todas as classes disponíveis no sistema"
     )
+
+
+class CargaLiquidaONS(BaseModel):
+    """Carga líquida (ONS) de uma distribuidora - apenas energia que vem da rede de transmissão."""
+
+    distribuidora: str = Field(..., description="Nome da distribuidora")
+    carga_liquida_mw: float = Field(
+        ...,
+        description="Carga líquida medida pelo ONS (MW) - energia que vem da rede de transmissão",
+        ge=0
+    )
+    data_medicao: datetime = Field(..., description="Timestamp da medição")
+    subsistema: str | None = Field(None, description="Subsistema ONS")
+
+
+class CargaTotalDistribuidora(BaseModel):
+    """Carga total (real) de uma distribuidora - inclui energia da rede + geração distribuída local."""
+
+    distribuidora: str = Field(..., description="Nome da distribuidora")
+    carga_liquida: float = Field(
+        ...,
+        description="Carga líquida (ONS) em MW - energia que vem da rede de transmissão",
+        ge=0
+    )
+    geracao_mmgd: float = Field(
+        ...,
+        description="Geração MMGD em MW - painéis solares e pequenas usinas locais",
+        ge=0
+    )
+    carga_distribuidora: float = Field(
+        ...,
+        description="Carga da distribuidora em MW = Carga Líquida + Geração MMGD. Este é o consumo REAL.",
+        ge=0
+    )
+    percentual_mmgd: float = Field(
+        ...,
+        description="Percentual de geração MMGD em relação à carga total (%)",
+        ge=0,
+        le=100
+    )
+    data_medicao: datetime = Field(..., description="Timestamp da medição")
+    subsistema: str | None = Field(None, description="Subsistema ONS")
