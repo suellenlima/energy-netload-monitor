@@ -1,4 +1,4 @@
-# ⚡ Energy Netload Monitor
+# ⚡ EFICIENERGY
 
 Sistema completo de **monitoramento de carga líquida**, **estimativa de geração distribuída (MMGD)**, **detecção de anomalias** e **análise de subestações** para sistemas elétricos de distribuição.
 
