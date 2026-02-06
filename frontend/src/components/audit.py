@@ -35,7 +35,7 @@ def render_auditoria(dados_ia: Optional[Dict[str, Any]], impacto_projecao_mw: fl
 
             kpi1.metric("Classificação (IA)", f"{classe_icone} {classe_ia}")
             if data_inspecao:
-                kpi2.metric("Data da Varredura", pd.to_datetime(data_inspecao).strftime("%d/%m/%Y"))
+                kpi2.metric("Data da Varredura", pd.to_datetime(data_inspecao, format="mixed", errors="coerce").strftime("%d/%m/%Y"))
             else:
                 kpi2.metric("Data da Varredura", "N/A")
             kpi3.metric("Área Estimada", f"{area_m2:.0f} m2")
@@ -175,11 +175,18 @@ def render_historico_alertas(client: ApiClient, distribuidora: str | None = None
         # Tabela de alertas
         if alertas_filtrados:
             df_alertas = pd.DataFrame(alertas_filtrados)
+            
+            # Sanitizar tipos de dados
+            if "impacto_kw" in df_alertas.columns:
+                df_alertas["impacto_kw"] = pd.to_numeric(df_alertas["impacto_kw"], errors="coerce").fillna(0.0).astype(float)
+            for str_col in ["distribuidora", "tipo", "severidade", "descricao", "status"]:
+                if str_col in df_alertas.columns:
+                    df_alertas[str_col] = df_alertas[str_col].fillna("").astype(str)
 
             # Preparar colunas para display
             colunas_exibir = []
             if "data_deteccao" in df_alertas.columns:
-                df_alertas["Data"] = pd.to_datetime(df_alertas["data_deteccao"]).dt.strftime("%d/%m/%Y %H:%M")
+                df_alertas["Data"] = pd.to_datetime(df_alertas["data_deteccao"], format="mixed", errors="coerce").dt.strftime("%d/%m/%Y %H:%M")
                 colunas_exibir.append("Data")
 
             if "distribuidora" in df_alertas.columns:
