@@ -166,6 +166,31 @@ CREATE TABLE IF NOT EXISTS geracao_mmgd (
     geracao_mw DOUBLE PRECISION
 );
 
+-- Tabela de MMGD por Distribuidora e Subestação (Dados ANEEL)
+CREATE TABLE IF NOT EXISTS geracao_mmgd_distribuidora (
+    id BIGSERIAL PRIMARY KEY,
+    distribuidora TEXT NOT NULL,
+    subsistema TEXT,
+    subestacao TEXT,
+    fonte_geracao TEXT,  -- 'Solar', 'Eólica', 'Hidro', 'Biomassa', etc
+    potencia_total_kw FLOAT8 NOT NULL,
+    quantidade_empreendimentos INT DEFAULT 0,
+    data_medicao TIMESTAMP WITH TIME ZONE,
+    data_insercao TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    
+    CONSTRAINT uq_mmgd_distribuidor_subestacao_fonte 
+        UNIQUE (distribuidora, subestacao, fonte_geracao, data_medicao)
+);
+
+CREATE INDEX IF NOT EXISTS idx_geracao_mmgd_distribuidora_name 
+ON geracao_mmgd_distribuidora(distribuidora);
+
+CREATE INDEX IF NOT EXISTS idx_geracao_mmgd_distribuidora_subsistema
+ON geracao_mmgd_distribuidora(subsistema);
+
+CREATE INDEX IF NOT EXISTS idx_geracao_mmgd_distribuidora_subestacao
+ON geracao_mmgd_distribuidora(subestacao);
+
 CREATE TABLE IF NOT EXISTS consumidor (
     id SERIAL PRIMARY KEY,
     codigo_cliente VARCHAR(50) UNIQUE,

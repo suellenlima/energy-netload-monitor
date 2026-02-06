@@ -16,6 +16,7 @@ class CargaOcultaItem(BaseModel):
     """
 
     hora: datetime = Field(..., description="Timestamp da medição")
+    distribuidora: str | None = Field(None, description="Distribuidora (opcional)")
     carga_ons: float = Field(
         ...,
         description="Carga líquida medida pelo ONS (MW) - potência média horária",
@@ -38,9 +39,19 @@ class CargaOcultaItem(BaseModel):
         description="Geração MMGD estimada (MW) - calculada com base em capacidade instalada e irradiância",
         ge=0
     )
+    consumo_estimado_mw: float = Field(
+        ...,
+        description="Consumo real estimado (MW) = Carga ONS - Geração MMGD (energia que vem da rede)",
+        ge=0
+    )
     carga_real_estimada: float = Field(
         ...,
-        description="Consumo real estimado (MW) = Carga Líquida ONS + Geração MMGD",
+        description="Consumo real estimado (MW) = Carga ONS - Geração MMGD",
+        ge=0
+    )
+    percentual_total: float = Field(
+        ...,
+        description="Percentual de geração MMGD em relação ao consumo (%)",
         ge=0
     )
 
