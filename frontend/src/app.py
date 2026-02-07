@@ -32,72 +32,72 @@ st.set_page_config(page_title=APP_TITLE, layout=LAYOUT, initial_sidebar_state="e
 st.title("⚡ Mapa Inteligente de Perfis de Carga e Geração Distribuída")
 
 # ==================== TOOLTIP EDUCATIVO (SEMPRE VISÍVEL) ====================
-with st.expander("ℹ️ Entenda os conceitos do sistema", expanded=False):
-    col_a, col_b, col_c = st.columns(3)
+# with st.expander("ℹ️ Entenda os conceitos do sistema", expanded=False):
+#     col_a, col_b, col_c = st.columns(3)
 
-    with col_a:
-        st.markdown("""
-        ### 🔵 Carga Líquida (ONS)
-        **O que é**: Medida nos pontos de entrega do sistema de transmissão.
-        É o que o Operador Nacional do Sistema (ONS) "enxerga" e registra oficialmente.
+#     with col_a:
+#         st.markdown("""
+#         ### 🔵 Carga Líquida (ONS)
+#         **O que é**: Medida nos pontos de entrega do sistema de transmissão.
+#         É o que o Operador Nacional do Sistema (ONS) "enxerga" e registra oficialmente.
 
-        **O que inclui**:
-        - Energia fornecida pela rede de transmissão
-        - Proveniente de usinas (hidro, térmica, eólica, solar centralizadas)
+#         **O que inclui**:
+#         - Energia fornecida pela rede de transmissão
+#         - Proveniente de usinas (hidro, térmica, eólica, solar centralizadas)
 
-        **O que NÃO inclui**:
-        - Geração distribuída (MMGD) consumida localmente
-        - Painéis solares em residências/comércios
-        """)
+#         **O que NÃO inclui**:
+#         - Geração distribuída (MMGD) consumida localmente
+#         - Painéis solares em residências/comércios
+#         """)
 
-    with col_b:
-        st.markdown("""
-        ### 🟡 Geração MMGD
-        **O que é**: Micro e Minigeração Distribuída. Painéis solares e pequenas
-        usinas instaladas no ponto de consumo.
+#     with col_b:
+#         st.markdown("""
+#         ### 🟡 Geração MMGD
+#         **O que é**: Micro e Minigeração Distribuída. Painéis solares e pequenas
+#         usinas instaladas no ponto de consumo.
 
-        **Características**:
-        - Capacidade: até 75 kW (micro) ou até 5 MW (mini)
-        - Geram energia consumida localmente
-        - Não passam pela transmissão
+#         **Características**:
+#         - Capacidade: até 75 kW (micro) ou até 5 MW (mini)
+#         - Geram energia consumida localmente
+#         - Não passam pela transmissão
 
-        **Impacto**:
-        - Durante o dia solar, reduzem a carga vista pelo ONS
-        - Criam uma "carga oculta"
-        """)
+#         **Impacto**:
+#         - Durante o dia solar, reduzem a carga vista pelo ONS
+#         - Criam uma "carga oculta"
+#         """)
 
-    with col_c:
-        st.markdown("""
-        ### 🟢 Consumo Real
-        **O que é**: Demanda TOTAL de energia pelos consumidores finais.
+#     with col_c:
+#         st.markdown("""
+#         ### 🟢 Consumo Real
+#         **O que é**: Demanda TOTAL de energia pelos consumidores finais.
 
-        **Fórmula**:
-        ```
-        Consumo Real =
-          Carga Líquida ONS +
-          Geração MMGD
-        ```
+#         **Fórmula**:
+#         ```
+#         Consumo Real =
+#           Carga Líquida ONS +
+#           Geração MMGD
+#         ```
 
-        **Relevância**:
-        - Representa a demanda real que precisa ser atendida
-        - Essencial para planejamento energético
-        - Base para análises de eficiência
-        """)
+#         **Relevância**:
+#         - Representa a demanda real que precisa ser atendida
+#         - Essencial para planejamento energético
+#         - Base para análises de eficiência
+#         """)
 
-    st.divider()
+#     st.divider()
 
-    st.markdown("""
-    ### 📊 Exemplo Prático (12h - Pico Solar)
+#     st.markdown("""
+#     ### 📊 Exemplo Prático (12h - Pico Solar)
 
-    | Variável | Valor | Explicação |
-    |----------|-------|------------|
-    | **Consumo Real** | 100 MW | O que os consumidores realmente usam |
-    | **Geração MMGD** | 30 MW | Painéis solares gerando |
-    | **Carga Líquida ONS** | 70 MW | 100 - 30 = o que vem da rede |
+#     | Variável | Valor | Explicação |
+#     |----------|-------|------------|
+#     | **Consumo Real** | 100 MW | O que os consumidores realmente usam |
+#     | **Geração MMGD** | 30 MW | Painéis solares gerando |
+#     | **Carga Líquida ONS** | 70 MW | 100 - 30 = o que vem da rede |
 
-    **Conclusão**: O ONS só "vê" 70 MW, mas o consumo real é 100 MW.
-    Os 30 MW de diferença são a "carga oculta" - energia gerada e consumida localmente.
-    """)
+#     **Conclusão**: O ONS só "vê" 70 MW, mas o consumo real é 100 MW.
+#     Os 30 MW de diferença são a "carga oculta" - energia gerada e consumida localmente.
+#     """)
 
 # ==================== SIDEBAR E ESTADO ====================
 client = ApiClient(API_URL)
@@ -122,10 +122,17 @@ if state.refresh:
     breadcrumb_placeholder = st.empty()
 
     # ==================== TABS PRINCIPAIS ====================
-    tab_visao, tab_subestacoes, tab_tempo, tab_perfis, tab_auditoria = st.tabs([
+    # tab_visao, tab_subestacoes, tab_tempo, tab_perfis, tab_auditoria = st.tabs([
+    #     "📊 Visão Geral",
+    #     "🏭 Subestações",
+    #     "⚡ Tempo Real",
+    #     "📈 Perfis & Análise",
+    #     "🔍 Auditoria"
+    # ])
+
+    tab_visao, tab_subestacoes, tab_perfis, tab_auditoria = st.tabs([
         "📊 Visão Geral",
         "🏭 Subestações",
-        "⚡ Tempo Real",
         "📈 Perfis & Análise",
         "🔍 Auditoria"
     ])
@@ -154,39 +161,39 @@ if state.refresh:
             render_estabelecimentos_compact(client, state.distribuidora)
 
     # ==================== TAB 2: TEMPO REAL ====================
-    with tab_tempo:
-        st.caption("Dashboard operacional com estimativas em tempo real e auto-refresh")
+    # with tab_tempo:
+    #     st.caption("Dashboard operacional com estimativas em tempo real e auto-refresh")
 
-        render_realtime_dashboard(
-            client,
-            subsistema=state.subsistema,
-            distribuidora=state.distribuidora,
-            auto_refresh=False
-        )
+    #     render_realtime_dashboard(
+    #         client,
+    #         subsistema=state.subsistema,
+    #         distribuidora=state.distribuidora,
+    #         auto_refresh=False
+    #     )
 
-        st.divider()
+    #     st.divider()
 
-        # ==================== HISTÓRICO DE CARGA ====================
-        st.markdown("### 📈 Histórico de Carga da Distribuidora")
-        st.caption("Evolução temporal da carga, geração MMGD e consumo estimado")
+    #     # ==================== HISTÓRICO DE CARGA ====================
+    #     st.markdown("### 📈 Histórico de Carga da Distribuidora")
+    #     st.caption("Evolução temporal da carga, geração MMGD e consumo estimado")
         
-        render_historico_carga(
-            client,
-            subsistema=state.subsistema,
-            distribuidora=state.distribuidora
-        )
+    #     render_historico_carga(
+    #         client,
+    #         subsistema=state.subsistema,
+    #         distribuidora=state.distribuidora
+    #     )
 
     # ==================== TAB 3: SUBESTAÇÕES ====================
     with tab_subestacoes:
-        st.caption("Subestações oficiais (ONS), detectadas por clustering e análise local")
+        # st.caption("Subestações oficiais (ONS), detectadas por clustering e análise local")
 
         # Seção de subestações (com sub-tabs internas)
         render_subestacoes_section(client, state.distribuidora)
 
-        st.divider()
+        # st.divider()
 
         # Análise local por subestação (FASE 2)
-        render_analise_local_subestacao(client, state.distribuidora)
+        # render_analise_local_subestacao(client, state.distribuidora)
 
     # ==================== TAB 4: PERFIS & ANÁLISE ====================
     with tab_perfis:
@@ -237,25 +244,14 @@ else:
         st.markdown("""
         ### Guia Rápido
 
-        1. **Selecione o Subsistema** (SUDESTE, SUL, NORDESTE, NORTE)
-        2. **Escolha a Distribuidora** (ou deixe "Todas")
-        3. **Ajuste o Multiplicador de Fraude** (para simulações)
+        1. **Selecione o Subsistema**
+        2. **Escolha a Distribuidora**
         4. **Clique em "Atualizar Dashboard"**
 
         ### Navegação por Tabs
 
         - **📊 Visão Geral**: Principais métricas e gráficos de carga
-        - **⚡ Tempo Real**: Monitoramento operacional com auto-refresh
-        - **🏭 Subestações**: Análise geoespacial e clustering
+        - **🏭 Subestações**: Análise geoespacial, MMGD e BDGD
         - **📈 Perfis & Análise**: Perfis de carga típicos e ferramentas analíticas
-        - **🔍 Auditoria**: Detecção de fraudes e integridade
-
-        ### Recursos Disponíveis
-
-        - ✅ KPIs executivos sempre visíveis no topo
-        - ✅ Breadcrumb de navegação contextual
-        - ✅ Gráficos interativos (zoom, pan, hover)
-        - ✅ Tabelas exportáveis
-        - ✅ Expanders educativos em cada seção
-        - ✅ Auto-refresh opcional no tempo real
+        - **🔍 Auditoria**: Detecção de MMGD e integridade
         """)
