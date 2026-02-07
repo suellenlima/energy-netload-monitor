@@ -1162,6 +1162,42 @@ def main():
     except Exception as e:
         logger.warning(f"  ⚠ Erro ao atualizar totais: {e}")
     
+    # 🔗 Vincular transformadores às subestações por proximidade geográfica
+    logger.info(f"\n  🔗 Vinculando transformadores às subestações por proximidade...\n")
+    try:
+        with engine.begin() as conn:
+            # Para cada transformador, encontrar a subestação mais próxima (até 10km)
+            result = conn.execute(text("""
+                WITH distancias AS (
+                    SELECT 
+                        t.id as transformador_id,
+                        s.id as subestacao_id,
+                        SQRT(POW((t.latitude - s.latitude), 2) + POW((t.longitude - s.longitude), 2)) * 111 as distancia_km,
+                        ROW_NUMBER() OVER (PARTITION BY t.id ORDER BY SQRT(POW((t.latitude - s.latitude), 2) + POW((t.longitude - s.longitude), 2))) as rn
+                    FROM transformadores_aneel t
+                    CROSS JOIN subestacoes_aneel s
+                    WHERE t.latitude IS NOT NULL 
+                    AND t.longitude IS NOT NULL
+                    AND s.latitude IS NOT NULL 
+                    AND s.longitude IS NOT NULL
+                    AND t.distribuidora = s.distribuidora
+                    AND t.subestacao_id IS NULL
+                    AND SQRT(POW((t.latitude - s.latitude), 2) + POW((t.longitude - s.longitude), 2)) * 111 < 10
+                )
+                UPDATE transformadores_aneel t
+                SET subestacao_id = d.subestacao_id
+                FROM distancias d
+                WHERE t.id = d.transformador_id
+                AND d.rn = 1
+                RETURNING t.id
+            """))
+            
+            total_vinculados = result.rowcount
+            logger.info(f"  ✅ {total_vinculados} transformadores vinculados às subestações!")
+            
+    except Exception as e:
+        logger.warning(f"  ⚠ Erro ao vincular transformadores: {e}")
+    
     # Resumo final
     logger.info(f"\n{'='*70}")
     logger.info(f"RESUMO FINAL")
