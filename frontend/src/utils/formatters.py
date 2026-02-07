@@ -125,16 +125,16 @@ def format_percentage(value: float, decimals: int = 1) -> str:
 
 def format_factor(value: float, decimals: int = 2) -> str:
     """
-    Formata fator de carga (p.u.).
+    Formata fator de carga (por unidade).
 
     Args:
-        value: Valor em p.u. (0.0-2.0)
+        value: Valor em por unidade (0.0-2.0)
         decimals: Casas decimais (padrão: 2)
 
     Returns:
-        String formatada (ex: "1,45 p.u.")
+        String formatada (ex: "1,45 por unidade")
     """
-    return format_number_br(value, decimals=decimals, unit=" p.u.")
+    return format_number_br(value, decimals=decimals, unit=" por unidade")
 
 
 def format_integer(value: int) -> str:
@@ -323,7 +323,7 @@ if __name__ == "__main__":
     print()
 
     print("Fator:")
-    print(f"  1.45 p.u. → {format_factor(1.45)}")
+    print(f"  1.45 por unidade → {format_factor(1.45)}")
     print()
 
     print("Inteiros:")
