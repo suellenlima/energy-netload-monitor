@@ -91,7 +91,7 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 LAYER_PATTERNS = {
     'transformadores': ['UNTRD', 'transformador', 'trafo', 'TRANSFORMADOR', 'TRAFO', 'UNTR', 'UNTRMT', 'UNTRAT'],
     'subestacoes': ['CTMT', 'SUB', 'subestacao', 'subest', 'SUBESTACAO', 'SUBEST', 'SE'],
-    'consumidores': ['UC', 'consumidor', 'ponto', 'CONSUMIDOR', 'PONTO', 'cliente'],
+    'consumidores': ['UC', 'consumidor', 'ponto', 'CONSUMIDOR', 'PONTO', 'cliente', 'UCBT', 'UCMT', 'UCAT', 'ucbt', 'ucmt', 'ucat', 'UCBT_tab', 'UCMT_tab', 'UCAT_tab', 'ucbt_tab', 'ucmt_tab', 'ucat_tab'],
 }
 
 # Mapeamento de campos para cada camada
@@ -307,6 +307,24 @@ def discover_layers(gdb_path: Path) -> Dict[str, List[str]]:
         logger.warning(f"  ⚠ Erro ao listar camadas: {e}")
     
     return layers_found
+
+
+def truncate_string_columns(df: pd.DataFrame, max_lengths: Dict[str, int]) -> pd.DataFrame:
+    """
+    Trunca colunas string para respeitar limites do banco de dados
+    
+    Args:
+        df: DataFrame com dados
+        max_lengths: Dict com nome da coluna e tamanho máximo {coluna: tamanho}
+        
+    Returns:
+        DataFrame com strings truncadas
+    """
+    for col, max_len in max_lengths.items():
+        if col in df.columns:
+            # Truncar apenas valores não-nulos
+            df[col] = df[col].apply(lambda x: str(x)[:max_len] if pd.notna(x) else x)
+    return df
 
 
 def normalize_geometry(gdf: gpd.GeoDataFrame) -> Tuple[gpd.GeoDataFrame, Dict]:
@@ -673,6 +691,17 @@ def extract_consumidores_bt(gdf: gpd.GeoDataFrame, distribuidora: str) -> pd.Dat
     df['data_criacao'] = datetime.now()
     df['data_atualizacao'] = datetime.now()
     
+    # Truncar strings para respeitar limites do banco
+    df = truncate_string_columns(df, {
+        'codigo': 50,
+        'distribuidora': 100,
+        'dist_codigo': 50,
+        'transformador_codigo': 50,
+        'circuito_bt_codigo': 50,
+        'classe_subclasse_codigo': 20,
+        'tensao_fornecimento_codigo': 20
+    })
+    
     # Remover duplicatas por código
     if 'codigo' in df.columns:
         df = df.drop_duplicates(subset=['codigo'], keep='first')
@@ -702,6 +731,17 @@ def extract_consumidores_mt(gdf: gpd.GeoDataFrame, distribuidora: str) -> pd.Dat
     df['data_criacao'] = datetime.now()
     df['data_atualizacao'] = datetime.now()
     
+    # Truncar strings para respeitar limites do banco
+    df = truncate_string_columns(df, {
+        'codigo': 50,
+        'distribuidora': 100,
+        'dist_codigo': 50,
+        'subestacao_codigo': 50,
+        'circuito_mt_codigo': 50,
+        'classe_subclasse_codigo': 20,
+        'tensao_fornecimento_codigo': 20
+    })
+    
     # Remover duplicatas por código
     if 'codigo' in df.columns:
         df = df.drop_duplicates(subset=['codigo'], keep='first')
@@ -730,6 +770,17 @@ def extract_consumidores_at(gdf: gpd.GeoDataFrame, distribuidora: str) -> pd.Dat
     # Adicionar campos de auditoria
     df['data_criacao'] = datetime.now()
     df['data_atualizacao'] = datetime.now()
+    
+    # Truncar strings para respeitar limites do banco
+    df = truncate_string_columns(df, {
+        'codigo': 50,
+        'distribuidora': 100,
+        'dist_codigo': 50,
+        'subestacao_codigo': 50,
+        'circuito_at_codigo': 50,
+        'classe_subclasse_codigo': 20,
+        'tensao_fornecimento_codigo': 20
+    })
     
     # Remover duplicatas por código
     if 'codigo' in df.columns:
@@ -980,27 +1031,60 @@ def process_distribuidora(dist_path: Path, dist_name: str, transformer_svc, subs
     # CONSUMIDORES DE BAIXA TENSÃO (UCBT)
     try:
         logger.info(f"    Processando UCBT (Consumidores de Baixa Tensão)...")
-        gdf_ucbt = gpd.read_file(str(gdb_path), layer='UCBT')
-        logger.info(f"      ✓ UCBT carregada: {len(gdf_ucbt)} registros")
+        # Tentar diferentes variações do nome da camada
+        gdf_ucbt = None
+        for layer_variant in ['UCBT', 'UCBT_tab', 'UcBT', 'ucbt']:
+            try:
+                # Carregar em lotes para não travar com muitos dados
+                logger.info(f"      Tentando carregar camada '{layer_variant}'...")
+                gdf_ucbt = gpd.read_file(str(gdb_path), layer=layer_variant, rows=100000)  # Limitar a 100k registros
+                logger.info(f"      ✓ Camada '{layer_variant}' carregada: {len(gdf_ucbt)} registros (limite: 100k)")
+                break
+            except Exception as e:
+                logger.debug(f"      Camada '{layer_variant}' não encontrada: {e}")
+                continue
         
-        df_bt = ConsumerService.extract_bt(gdf_ucbt, dist_name)
-        if not df_bt.empty:
-            n_inserted = consumer_svc.insert_bt(df_bt, dist_name)
-            stats['consumidores_bt_inseridos'] = n_inserted
+        if gdf_ucbt is not None and not gdf_ucbt.empty:
+            logger.info(f"      Extraindo dados dos consumidores BT...")
+            df_bt = ConsumerService.extract_bt(gdf_ucbt, dist_name)
+            if not df_bt.empty:
+                logger.info(f"      Inserindo {len(df_bt)} consumidores BT no banco...")
+                n_inserted = consumer_svc.insert_bt(df_bt, dist_name)
+                stats['consumidores_bt_inseridos'] = n_inserted
+                logger.info(f"      ✓ {n_inserted} consumidores BT inseridos")
+        else:
+            logger.debug(f"    ℹ UCBT não disponível")
+            stats['consumidores_bt_inseridos'] = 0
     except Exception as e:
-        logger.debug(f"    ℹ UCBT não disponível ou erro: {e}")
+        logger.error(f"    ❌ Erro ao processar UCBT: {e}")
         stats['consumidores_bt_inseridos'] = 0
     
     # CONSUMIDORES DE MÉDIA TENSÃO (UCMT)
     try:
         logger.info(f"    Processando UCMT (Consumidores de Média Tensão)...")
-        gdf_ucmt = gpd.read_file(str(gdb_path), layer='UCMT')
-        logger.info(f"      ✓ UCMT carregada: {len(gdf_ucmt)} registros")
+        # Tentar diferentes variações do nome da camada
+        gdf_ucmt = None
+        for layer_variant in ['UCMT', 'UCMT_tab', 'UcMT', 'ucmt']:
+            try:
+                logger.info(f"      Tentando carregar camada '{layer_variant}'...")
+                gdf_ucmt = gpd.read_file(str(gdb_path), layer=layer_variant, rows=50000)  # Limitar a 50k registros
+                logger.info(f"      ✓ Camada '{layer_variant}' carregada: {len(gdf_ucmt)} registros (limite: 50k)")
+                break
+            except Exception as e:
+                logger.debug(f"      Camada '{layer_variant}' não encontrada: {e}")
+                continue
         
-        df_mt = ConsumerService.extract_mt(gdf_ucmt, dist_name)
-        if not df_mt.empty:
-            n_inserted = consumer_svc.insert_mt(df_mt, dist_name)
-            stats['consumidores_mt_inseridos'] = n_inserted
+        if gdf_ucmt is not None and not gdf_ucmt.empty:
+            logger.info(f"      Extraindo dados dos consumidores MT...")
+            df_mt = ConsumerService.extract_mt(gdf_ucmt, dist_name)
+            if not df_mt.empty:
+                logger.info(f"      Inserindo {len(df_mt)} consumidores MT no banco...")
+                n_inserted = consumer_svc.insert_mt(df_mt, dist_name)
+                stats['consumidores_mt_inseridos'] = n_inserted
+                logger.info(f"      ✓ {n_inserted} consumidores MT inseridos")
+        else:
+            logger.debug(f"    ℹ UCMT não disponível")
+            stats['consumidores_mt_inseridos'] = 0
     except Exception as e:
         logger.debug(f"    ℹ UCMT não disponível ou erro: {e}")
         stats['consumidores_mt_inseridos'] = 0
@@ -1008,15 +1092,31 @@ def process_distribuidora(dist_path: Path, dist_name: str, transformer_svc, subs
     # CONSUMIDORES DE ALTA TENSÃO (UCAT)
     try:
         logger.info(f"    Processando UCAT (Consumidores de Alta Tensão)...")
-        gdf_ucat = gpd.read_file(str(gdb_path), layer='UCAT')
-        logger.info(f"      ✓ UCAT carregada: {len(gdf_ucat)} registros")
+        # Tentar diferentes variações do nome da camada
+        gdf_ucat = None
+        for layer_variant in ['UCAT', 'UCAT_tab', 'UcAT', 'ucat']:
+            try:
+                logger.info(f"      Tentando carregar camada '{layer_variant}'...")
+                gdf_ucat = gpd.read_file(str(gdb_path), layer=layer_variant, rows=10000)  # Limitar a 10k registros
+                logger.info(f"      ✓ Camada '{layer_variant}' carregada: {len(gdf_ucat)} registros (limite: 10k)")
+                break
+            except Exception as e:
+                logger.debug(f"      Camada '{layer_variant}' não encontrada: {e}")
+                continue
         
-        df_at = ConsumerService.extract_at(gdf_ucat, dist_name)
-        if not df_at.empty:
-            n_inserted = consumer_svc.insert_at(df_at, dist_name)
-            stats['consumidores_at_inseridos'] = n_inserted
+        if gdf_ucat is not None and not gdf_ucat.empty:
+            logger.info(f"      Extraindo dados dos consumidores AT...")
+            df_at = ConsumerService.extract_at(gdf_ucat, dist_name)
+            if not df_at.empty:
+                logger.info(f"      Inserindo {len(df_at)} consumidores AT no banco...")
+                n_inserted = consumer_svc.insert_at(df_at, dist_name)
+                stats['consumidores_at_inseridos'] = n_inserted
+                logger.info(f"      ✓ {n_inserted} consumidores AT inseridos")
+        else:
+            logger.debug(f"    ℹ UCAT não disponível")
+            stats['consumidores_at_inseridos'] = 0
     except Exception as e:
-        logger.debug(f"    ℹ UCAT não disponível ou erro: {e}")
+        logger.error(f"    ❌ Erro ao processar UCAT: {e}")
         stats['consumidores_at_inseridos'] = 0
     
     # Total consumidores

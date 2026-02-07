@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from components.alerts import fetch_alerta, render_alerta
-from components.audit import render_auditoria, render_historico_alertas
+# from components.audit import render_auditoria, render_historico_alertas
 from components.charts import (
     load_carga_data,
     render_carga_section,
@@ -130,11 +130,17 @@ if state.refresh:
     #     "🔍 Auditoria"
     # ])
 
-    tab_visao, tab_subestacoes, tab_perfis, tab_auditoria = st.tabs([
+    # tab_visao, tab_subestacoes, tab_perfis, tab_auditoria = st.tabs([
+    #     "📊 Visão Geral",
+    #     "🏭 Subestações",
+    #     "📈 Perfis & Análise",
+    #     "🔍 Auditoria"
+    # ])
+
+    tab_visao, tab_subestacoes, tab_perfis = st.tabs([
         "📊 Visão Geral",
         "🏭 Subestações",
-        "📈 Perfis & Análise",
-        "🔍 Auditoria"
+        "📈 Perfis & Análise"
     ])
 
     # ==================== TAB 1: VISÃO GERAL ====================
@@ -202,38 +208,38 @@ if state.refresh:
         # Perfis de carga típicos
         render_perfis_carga(client)
 
-    # ==================== TAB 5: AUDITORIA ====================
-    with tab_auditoria:
-        st.caption("Detecção de fraudes e análise de integridade do sistema")
+    # ==================== TAB 5: AUDITORIA (COMENTADO) ====================
+    # with tab_auditoria:
+    #     st.caption("Detecção de fraudes e análise de integridade do sistema")
 
-        # Verificar se há dados de auditoria
-        if dados_ia and dados_ia.get("status") == "ALERTA":
-            render_auditoria(dados_ia, impacto_projecao_mw, state.multiplicador)
-        else:
-            st.success("✅ Sistema sem alertas de integridade detectados")
+    #     # Verificar se há dados de auditoria
+    #     if dados_ia and dados_ia.get("status") == "ALERTA":
+    #         render_auditoria(dados_ia, impacto_projecao_mw, state.multiplicador)
+    #     else:
+    #         st.success("✅ Sistema sem alertas de integridade detectados")
 
-            # Mostrar informações mesmo sem alertas
-            st.info("""
-            **Monitoramento Ativo**
+    #         # Mostrar informações mesmo sem alertas
+    #         st.info("""
+    #         **Monitoramento Ativo**
 
-            O sistema está monitorando continuamente:
-            - 🔍 Detecção de fraudes via IA
-            - ⚖️ Análise de integridade de dados
-            - 📊 Comparação com padrões esperados
-            - 🚨 Alertas automáticos em caso de anomalias
-            """)
+    #         O sistema está monitorando continuamente:
+    #         - 🔍 Detecção de fraudes via IA
+    #         - ⚖️ Análise de integridade de dados
+    #         - 📊 Comparação com padrões esperados
+    #         - 🚨 Alertas automáticos em caso de anomalias
+    #         """)
 
-            # Mostrar métricas básicas mesmo sem alerta
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Status Geral", "Normal", delta="✓ Sem anomalias", help="Sistema operando normalmente")
-            with col2:
-                st.metric("Última Verificação", "Agora", help="Monitoramento contínuo ativo")
-            with col3:
-                st.metric("Nível de Risco", "Baixo", delta="0% detectado", help="Nenhuma irregularidade identificada")
+    #         # Mostrar métricas básicas mesmo sem alerta
+    #         col1, col2, col3 = st.columns(3)
+    #         with col1:
+    #             st.metric("Status Geral", "Normal", delta="✓ Sem anomalias", help="Sistema operando normalmente")
+    #         with col2:
+    #             st.metric("Última Verificação", "Agora", help="Monitoramento contínuo ativo")
+    #         with col3:
+    #             st.metric("Nível de Risco", "Baixo", delta="0% detectado", help="Nenhuma irregularidade identificada")
 
-        # Histórico de alertas (sempre visível)
-        render_historico_alertas(client, state.distribuidora)
+    #     # Histórico de alertas (sempre visível)
+    #     render_historico_alertas(client, state.distribuidora)
 
 else:
     # ==================== MENSAGEM INICIAL ====================

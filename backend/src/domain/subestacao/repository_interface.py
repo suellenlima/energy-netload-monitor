@@ -101,3 +101,15 @@ class ISubestacaoRepository(ABC):
             Dicionário com estatísticas (total, tensão média, etc)
         """
         pass
+    
+    @abstractmethod
+    def obter_mix_consumidores(self, subestacao_id: int) -> Dict[str, Any]:
+        """Obtém mix de consumidores por subestação.
+        
+        Args:
+            subestacao_id: ID da subestação
+            
+        Returns:
+            Dicionário com mix de consumidores por classe
+        """
+        pass
