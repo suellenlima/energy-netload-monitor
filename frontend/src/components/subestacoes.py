@@ -21,54 +21,56 @@ def render_subestacoes_section(client: ApiClient, distribuidora: str | None = No
     """
     Renderiza seção de subestações com abas para ONS e detectadas.
     """
-    st.subheader("⚡ Análise de Subestações")
+    # st.subheader("⚡ Análise de Subestações")
     
-    col1, col2, col3 = st.columns([1, 1, 1])
+    # col1, col2, col3 = st.columns([1, 1, 1])
     
-    with col1:
-        if st.button("🔄 Atualizar Detecção", use_container_width=True, key="btn_atualizar_deteccao"):
-            atualizar_subestacoes_detectadas(client, distribuidora)
+    # with col1:
+    #     if st.button("🔄 Atualizar Detecção", use_container_width=True, key="btn_atualizar_deteccao"):
+    #         atualizar_subestacoes_detectadas(client, distribuidora)
     
-    with col2:
-        eps_km = st.number_input("Raio de detecção (km)", min_value=1.0, max_value=20.0, value=5.0, step=0.5)
+    # with col2:
+    #     eps_km = st.number_input("Raio de detecção (km)", min_value=1.0, max_value=20.0, value=5.0, step=0.5)
     
-    with col3:
-        limite = st.number_input("Limite de registros", min_value=10, max_value=500, value=100, step=10)
+    # with col3:
+    #     limite = st.number_input("Limite de registros", min_value=10, max_value=500, value=100, step=10)
     
     # Abas para diferentes visualizações
-    tab_ons, tab_detectadas, tab_geo = st.tabs(["🏢 ONS (Oficial)", "🔍 Detectadas (Clustering)", "🗺️ Mapa"])
+    # tab_ons, tab_detectadas, tab_geo = st.tabs(["🏢 ONS (Oficial)", "🔍 Detectadas (Clustering)", "🗺️ Mapa"])
+    tab_ons, tab_geo = st.tabs(["🏢 Visão Geral", "🗺️ Mapa"])
     
     # Aba ONS
     with tab_ons:
-        render_tab_subestacoes_ons(client, distribuidora, limite)
+        # render_tab_subestacoes_ons(client, distribuidora, limite)
+        render_analise_local_subestacao(client, distribuidora)
     
     # Aba Detectadas
-    with tab_detectadas:
-        render_tab_subestacoes_detectadas(client, distribuidora, limite)
+    # with tab_detectadas:
+    #     render_tab_subestacoes_detectadas(client, distribuidora, limite)
     
     # Aba Mapa
     with tab_geo:
         render_tab_mapa_subestacoes(client)
     
     # Resumo
-    render_resumo_subestacoes(client)
+    # render_resumo_subestacoes(client)
 
 
 def render_tab_subestacoes_ons(client: ApiClient, distribuidora: str | None, limite: int):
     """
     Exibe tabela de subestações oficiais do ONS.
     """
-    result = client.get("/subestacoes/ons", params={"distribuidora": distribuidora, "limite": limite})
+    # result = client.get("/subestacoes/ons", params={"distribuidora": distribuidora, "limite": limite})
     
-    if result.error:
-        st.error(f"Erro ao buscar subestações ONS: {result.error}")
-        return
+    # if result.error:
+    #     st.error(f"Erro ao buscar subestações ONS: {result.error}")
+    #     return
     
-    if not result.data:
-        st.info("Nenhuma subestação ONS encontrada.")
-        return
+    # if not result.data:
+    #     st.info("Nenhuma subestação ONS encontrada.")
+    #     return
     
-    df = pd.DataFrame(result.data)
+    # df = pd.DataFrame(result.data)
     
     # Sanitizar tipos de dados
     if "tensao_kv" in df.columns:
@@ -270,12 +272,12 @@ def render_analise_local_subestacao(client: ApiClient, distribuidora: str | None
     """
     import plotly.graph_objects as go
 
-    st.info("""
-    **Análise Centrada na Subestação** (FASE 2)
+    # st.info("""
+    # **Análise Centrada na Subestação** (FASE 2)
 
-    Abandonamos visões agregadas por distribuidora/região para focar em análises
-    locais defensáveis e compatíveis com o escopo do MVP.
-    """)
+    # Abandonamos visões agregadas por distribuidora/região para focar em análises
+    # locais defensáveis e compatíveis com o escopo do MVP.
+    # """)
 
     # Buscar lista de subestações
     params = {}
@@ -292,47 +294,37 @@ def render_analise_local_subestacao(client: ApiClient, distribuidora: str | None
     df_subs = pd.DataFrame(subestacoes)
 
     # Seletor de subestação
-    col1, col2 = st.columns([2, 1])
+    if not df_subs.empty:
+        # Criar display com nome + ID
+        df_subs["display"] = df_subs.apply(
+            lambda row: f"{row.get('nome', 'SE ' + str(row['id']))} (ID: {row['id']})",
+            axis=1
+        )
+        subestacao_selecionada = st.selectbox(
+            "Selecione a subestação:",
+            options=df_subs["display"].tolist(),
+            index=0
+        )
 
-    with col1:
-        if not df_subs.empty:
-            # Criar display com nome + ID
-            df_subs["display"] = df_subs.apply(
-                lambda row: f"{row.get('nome', 'SE ' + str(row['id']))} (ID: {row['id']})",
-                axis=1
-            )
-            subestacao_selecionada = st.selectbox(
-                "Selecione a subestação:",
-                options=df_subs["display"].tolist(),
-                index=0
-            )
+        # Extrair ID
+        subestacao_id = int(subestacao_selecionada.split("ID: ")[1].split(")")[0])
+    else:
+        st.warning("Nenhuma subestação encontrada")
+        return
 
-            # Extrair ID
-            subestacao_id = int(subestacao_selecionada.split("ID: ")[1].split(")")[0])
-        else:
-            st.warning("Nenhuma subestação encontrada")
-            return
-
-    with col2:
-        if st.button("🔗 Associar UCs", use_container_width=True, key="btn_associar_ucs"):
-            with st.spinner("Associando UCs à subestação..."):
-                assoc_result = client.post("/subestacoes/associar-ucs", params={"raio_km": 10.0})
-                if assoc_result.error:
-                    st.error(f"Erro: {assoc_result.error}")
-                else:
-                    stats = assoc_result.data
-                    st.success(
-                        f"✅ {format_integer(stats.get('ucs_associadas', 0))}/{format_integer(stats.get('total_ucs', 0))} UCs "
-                        f"({format_percentage(stats.get('percentual_associado', 0)).replace('%', '')}%)"
-                    )
-
-    st.divider()
+    # st.divider()
 
     # Tab de análises
-    tab_mix, tab_carga, tab_comparativo = st.tabs([
+    # tab_mix, tab_carga, tab_comparativo = st.tabs([
+    #     "📊 Mix de Consumidores",
+    #     "📈 Carga Sintética",
+    #     "⚖️ Comparativos"
+    # ])
+
+    tab_mix, tab_carga, tab_mapa = st.tabs([
         "📊 Mix de Consumidores",
         "📈 Carga Sintética",
-        "⚖️ Comparativos"
+        "🗺️ Mapa"
     ])
 
     # Tab: Mix de Consumidores
@@ -498,6 +490,5 @@ def render_analise_local_subestacao(client: ApiClient, distribuidora: str | None
                             st.metric("Média", format_kw(dados['media_kw'], decimals=1))
 
     # Tab: Comparativos
-    with tab_comparativo:
-        st.subheader("Comparativos e Validações")
-        st.info("🚧 Em desenvolvimento: Comparação com carga ONS e validações cruzadas")
+    with tab_mapa:
+        render_tab_mapa_subestacoes(client)
