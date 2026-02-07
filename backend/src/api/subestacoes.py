@@ -608,7 +608,9 @@ def get_visao_geral_subestacao(
                     nome,
                     distribuidora,
                     tensao_kv,
-                    codigo
+                    codigo,
+                    latitude,
+                    longitude
                 FROM subestacoes_aneel
                 WHERE id = :id
             """)
@@ -622,7 +624,9 @@ def get_visao_geral_subestacao(
                 "nome": result_sub[1] or f"Subestação {result_sub[0]}",
                 "distribuidora": result_sub[2] or "N/A",
                 "tensao_kv": float(result_sub[3] or 0),
-                "codigo": result_sub[4] or ""
+                "codigo": result_sub[4] or "",
+                "latitude": float(result_sub[5]) if result_sub[5] else None,
+                "longitude": float(result_sub[6]) if result_sub[6] else None
             }
             
             # MMGD detectada (painéis solares) - direto da subestação
@@ -642,14 +646,40 @@ def get_visao_geral_subestacao(
                 "confianca_media": float(result_paineis[2] or 0)
             }
             
-            # Contar transformadores associados
-            query_transformadores = text("""
-                SELECT COUNT(*) 
-                FROM transformadores_aneel 
-                WHERE subestacao_id = :id
-            """)
-            result_transf = conn.execute(query_transformadores, {"id": subestacao_id}).fetchone()
-            subestacao_info["total_transformadores"] = int(result_transf[0] or 0)
+            # Contar transformadores associados (por ID ou proximidade)
+            with engine.connect() as conn:
+                # Só busca por proximidade se a subestação tiver coordenadas
+                if subestacao_info.get("latitude") and subestacao_info.get("longitude"):
+                    query_count = text("""
+                        SELECT COUNT(*), COALESCE(SUM(potencia_kva), 0)
+                        FROM transformadores_aneel t
+                        WHERE t.subestacao_id = :id 
+                           OR (t.latitude IS NOT NULL AND t.longitude IS NOT NULL 
+                               AND t.distribuidora = :dist
+                               AND SQRT(POW((t.latitude - :lat), 2) + POW((t.longitude - :lng), 2)) * 111 < 5)
+                    """)
+                    result_count = conn.execute(query_count, {
+                        "id": subestacao_id,
+                        "dist": subestacao_info["distribuidora"],
+                        "lat": subestacao_info["latitude"],
+                        "lng": subestacao_info["longitude"]
+                    }).fetchone()
+                else:
+                    # Sem coordenadas, busca apenas por subestacao_id
+                    query_count = text("""
+                        SELECT COUNT(*), COALESCE(SUM(potencia_kva), 0)
+                        FROM transformadores_aneel t
+                        WHERE t.subestacao_id = :id
+                    """)
+                    result_count = conn.execute(query_count, {"id": subestacao_id}).fetchone()
+                
+                total_transformadores_proximos = int(result_count[0] or 0)
+                potencia_total_kva = float(result_count[1] or 0)
+                
+                subestacao_info["total_transformadores"] = total_transformadores_proximos
+                subestacao_info["potencia_instalada_kva"] = potencia_total_kva
+                
+                logger.info(f"Subestação {subestacao_id}: {total_transformadores_proximos} transformadores, {potencia_total_kva:.0f} kVA instalados")
         
         # Buscar carga sintética e mix de consumidores usando use cases existentes
         try:
@@ -664,7 +694,25 @@ def get_visao_geral_subestacao(
                 "fator_carga": carga_data.get("estatisticas", {}).get("fator_carga", 0),
                 "hora_pico": carga_data.get("estatisticas", {}).get("hora_pico", 0)
             }
-        except:
+            
+            # Se não há carga calculada, estimar pela potência dos transformadores (fallback)
+            if carga_info["pico_mw"] == 0:
+                potencia_kva = subestacao_info.get("potencia_instalada_kva", 0)
+                
+                if potencia_kva > 0:
+                    # Estimativa: assume fator de demanda de 0.6 e fator de potência de 0.92
+                    potencia_demanda_kw = potencia_kva * 0.6 * 0.92
+                    carga_info["pico_mw"] = potencia_demanda_kw / 1000.0
+                    carga_info["media_mw"] = potencia_demanda_kw * 0.65 / 1000.0
+                    carga_info["vale_mw"] = potencia_demanda_kw * 0.35 / 1000.0
+                    carga_info["fator_carga"] = 0.65
+                    carga_info["hora_pico"] = 19
+                    carga_info["estimado"] = True
+                    carga_info["base_calculo"] = f"Baseado em {potencia_kva:.0f} kVA de transformadores"
+                    logger.info(f"Carga estimada para subestação {subestacao_id}: {carga_info['pico_mw']:.2f} MW (baseado em {potencia_kva:.0f} kVA)")
+                        
+        except Exception as e:
+            logger.error(f"Erro ao calcular carga para subestação {subestacao_id}: {e}", exc_info=True)
             carga_info = {
                 "curva_horaria_mw": [],
                 "pico_mw": 0,

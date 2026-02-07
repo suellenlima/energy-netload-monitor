@@ -424,7 +424,7 @@ def render_analise_local_subestacao(client: ApiClient, distribuidora: str | None
                 st.warning(f"⚠️ {consumidores_info.get('erro')}. Execute 'Associar UCs' primeiro.")
                 mix = {}  # Definir mix vazio
             elif consumidores_info.get("total_ucs", 0) == 0:
-                st.info("Nenhuma UC associada a esta subestação. Execute 'Associar UCs' primeiro.")
+                st.info("Nenhuma Unidade Consumidora associada a esta subestação. Nos dados BDGD atualizados da ANEEL.")
                 mix = {}  # Definir mix vazio
             else:
                 # Métricas totais
@@ -537,7 +537,7 @@ def render_analise_local_subestacao(client: ApiClient, distribuidora: str | None
                 else:
                     st.info("Nenhum dado de estabelecimentos disponível")
             else:
-                st.info("Associe UCs primeiro para ver análise de estabelecimentos")
+                st.info("A subestação precisa ter Unidades Consumidoras associadas primeiro para ver análise de estabelecimentos")
 
     # Tab: Curva de Carga Sintética
     with tab_carga:
