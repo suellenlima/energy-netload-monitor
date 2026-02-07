@@ -363,15 +363,7 @@ class ObtenerMixConsumidoresUseCase:
     
     def executar(self, subestacao_id: int) -> Dict[str, Any]:
         """Executa o caso de uso"""
-        return {
-            'subestacao_id': subestacao_id,
-            'mix': {},
-            'totais': {
-                'qtd_instalacoes': 0,
-                'qtd_unidades_consumidoras': 0,
-                'potencia_total_mw': 0.0
-            }
-        }
+        return self.repository.obter_mix_consumidores(subestacao_id)
 
 
 # ========================================================================

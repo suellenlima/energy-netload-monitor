@@ -4,6 +4,7 @@ Componente para exibir e gerenciar subestações no Streamlit.
 
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 from services.api_client import ApiClient
 from utils.formatters import (
     format_mw,
@@ -339,10 +340,11 @@ def render_analise_local_subestacao(client: ApiClient, distribuidora: str | None
     # st.divider()
 
     # Tab de análises
-    tab_visao, tab_carga, tab_geo = st.tabs([
+    tab_visao, tab_carga, tab_geo, tab_paineis = st.tabs([
         "📊 Visão Geral",
         "📈 Curva de Carga",
-        "🗺️ Mapa"
+        "🗺️ Mapa",
+        "☀️ Painéis Solares"
     ])
 
     # Tab: Visão Geral da Subestação (replicando a visão do distribuidor)
@@ -402,9 +404,9 @@ def render_analise_local_subestacao(client: ApiClient, distribuidora: str | None
                 # Assumindo que 85% da capacidade é utilizada no pico
                 capacidade_estimada = carga_pico / 0.85 if carga_pico > 0 else 0
                 st.metric(
-                    "⚡ Capacidade Estimada",
+                    "⚡ Capacidade Instalada",
                     format_mw(capacidade_estimada, decimals=1),
-                    help="Capacidade instalada estimada da subestação"
+                    help="Capacidade instalada estimada da subestação (baseada no pico de carga / 0.85)"
                 )
             
             with col4:
@@ -787,3 +789,264 @@ def render_analise_local_subestacao(client: ApiClient, distribuidora: str | None
                 
                 with col3:
                     st.metric("Com Coordenadas", f"{len(transf_validos)}/{total}")
+
+    # Tab: Painéis Solares Detectados
+    with tab_paineis:
+        st.subheader("☀️ Painéis Solares Detectados por Transformador")
+        
+        # Buscar transformadores da subestação
+        with st.spinner("Carregando painéis solares..."):
+            try:
+                import requests
+                
+                # Fazer requisição ao backend para obter dados dos painéis por transformador
+                response = requests.get(
+                    f"http://127.0.0.1:8000/api/v1/subestacoes/{subestacao_id}/paineis-por-transformador",
+                    timeout=30
+                )
+                
+                resultados = []
+                if response.status_code == 200:
+                    dados = response.json()
+                    transformadores_data = dados.get("data", {}).get("transformadores", [])
+                    
+                    # Converter para formato de tupla esperado
+                    for t in transformadores_data:
+                        resultados.append((
+                            t.get("transformador_id"),
+                            t.get("transformador_codigo"),
+                            t.get("latitude"),
+                            t.get("longitude"),
+                            t.get("total_paineis", 0),
+                            t.get("area_total_m2", 0),
+                            t.get("potencia_total_kw", 0),
+                            t.get("confianca_media", 0),
+                            t.get("total_telhados", 0)
+                        ))
+                elif response.status_code == 404:
+                    resultados = []
+                else:
+                    st.error(f"Erro ao buscar dados: Status {response.status_code}")
+                    resultados = []
+                
+                if not resultados:
+                    st.info("Nenhum painel solar detectado para transformadores desta subestação ainda.")
+                    st.markdown("""
+                    ### 🔍 Como detectar painéis solares:
+                    
+                    1. **Detectar telhados** primeiro:
+                       ```bash
+                       POST /api/v1/telhados/detectar
+                       Body: {"transformador_id": <ID>, "grid_size": 2, "zoom": 20}
+                       ```
+                    
+                    2. **Detectar painéis** nos telhados:
+                       ```bash
+                       POST /api/v1/paineis-solares/detectar
+                       Body: {"transformador_id": <ID>, "confianca_minima": 0.3}
+                       ```
+                    """)
+                else:
+                    # Calcular totais
+                    total_paineis = sum(r[4] for r in resultados)
+                    total_area = sum(r[5] for r in resultados)
+                    total_potencia = sum(r[6] for r in resultados)
+                    confianca_geral = sum(r[7] * r[4] for r in resultados) / total_paineis if total_paineis > 0 else 0
+                    
+                    # KPIs principais
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric(
+                            "⚡ Potência Total",
+                            f"{total_potencia:.2f} kW",
+                            help="Potência instalada total dos painéis detectados"
+                        )
+                    
+                    with col2:
+                        st.metric(
+                            "☀️ Painéis Detectados",
+                            format_integer(total_paineis),
+                            help="Número total de painéis solares identificados por IA"
+                        )
+                    
+                    with col3:
+                        st.metric(
+                            "🔌 Transformadores",
+                            format_integer(len(resultados)),
+                            help="Transformadores com painéis detectados"
+                        )
+                    
+                    with col4:
+                        st.metric(
+                            "📊 Confiança Média",
+                            f"{int(confianca_geral * 100)}%",
+                            help="Confiança média das detecções"
+                        )
+                    
+                    st.divider()
+                    
+                    # Lista de transformadores com painéis
+                    st.markdown("### 📋 Transformadores com Painéis Detectados")
+                    
+                    for idx, row in enumerate(resultados):
+                        trafo_id, trafo_codigo, lat, lon, num_paineis, area_m2, potencia_kw, confianca, num_telhados = row
+                        
+                        with st.expander(f"🔌 Transformador {trafo_codigo} - {num_paineis} painéis ({potencia_kw:.2f} kW)", expanded=(idx == 0)):
+                            # Métricas do transformador
+                            col1, col2, col3, col4 = st.columns(4)
+                            
+                            with col1:
+                                st.metric("ID", trafo_id)
+                            with col2:
+                                st.metric("Painéis", num_paineis)
+                            with col3:
+                                st.metric("Área", f"{area_m2:.1f} m²")
+                            with col4:
+                                st.metric("Confiança", f"{int(confianca * 100)}%")
+                            
+                            # Buscar detalhes dos painéis deste transformador via API
+                            paineis_response = requests.get(
+                                f"http://127.0.0.1:8000/api/v1/transformadores/{trafo_id}/paineis-detalhes",
+                                timeout=30
+                            )
+                            
+                            paineis = []
+                            if paineis_response.status_code == 200:
+                                paineis_data = paineis_response.json()
+                                paineis_list = paineis_data.get("data", {}).get("paineis", [])
+                                
+                                # Converter para formato tupla
+                                for p in paineis_list:
+                                    paineis.append((
+                                        p.get("id"),
+                                        p.get("telhado_id"),
+                                        p.get("area_m2"),
+                                        p.get("potencia_w"),
+                                        p.get("confianca"),
+                                        p.get("telhado_lat"),
+                                        p.get("telhado_lon"),
+                                        p.get("url_imagem")
+                                    ))
+                            
+                            # Tabela de painéis
+                            if paineis:
+                                st.markdown("**Top 5 Painéis por Confiança:**")
+                                
+                                df_paineis = pd.DataFrame(paineis, columns=[
+                                    "ID", "Telhado ID", "Área (m²)", "Potência (W)", 
+                                    "Confiança", "Lat", "Lon", "URL Imagem"
+                                ])
+                                
+                                df_paineis["Confiança"] = df_paineis["Confiança"].apply(lambda x: f"{int(x * 100)}%")
+                                df_paineis["Área (m²)"] = df_paineis["Área (m²)"].apply(lambda x: f"{x:.1f}")
+                                df_paineis["Potência (W)"] = df_paineis["Potência (W)"].apply(lambda x: f"{x:.0f}")
+                                
+                                st.dataframe(
+                                    df_paineis[["ID", "Telhado ID", "Área (m²)", "Potência (W)", "Confiança"]],
+                                    use_container_width=True,
+                                    hide_index=True
+                                )
+                                
+                                # Mostrar imagens dos telhados
+                                st.markdown("**📸 Imagens dos Telhados com Painéis:**")
+                                
+                                # Mostrar até 3 imagens
+                                cols = st.columns(min(3, len(paineis)))
+                                for i, painel in enumerate(paineis[:3]):
+                                    url_imagem = painel[7]
+                                    if url_imagem:
+                                        with cols[i]:
+                                            st.image(
+                                                url_imagem,
+                                                caption=f"Telhado {painel[1]} - {int(painel[4] * 100)}% conf.",
+                                                use_column_width=True
+                                            )
+                    
+                    st.divider()
+                    
+                    # Gráfico de distribuição
+                    st.markdown("### 📊 Distribuição de Painéis por Transformador")
+                    
+                    import plotly.graph_objects as go
+                    
+                    # Top 10 transformadores
+                    top_10 = resultados[:10]
+                    labels = [f"T-{r[1]}" for r in top_10]
+                    valores = [r[4] for r in top_10]
+                    potencias = [r[6] for r in top_10]
+                    
+                    fig = go.Figure()
+                    
+                    fig.add_trace(go.Bar(
+                        x=labels,
+                        y=valores,
+                        name='Quantidade',
+                        marker_color='lightgreen',
+                        text=valores,
+                        textposition='auto',
+                        yaxis='y1'
+                    ))
+                    
+                    fig.add_trace(go.Scatter(
+                        x=labels,
+                        y=potencias,
+                        name='Potência (kW)',
+                        marker_color='orange',
+                        mode='lines+markers',
+                        yaxis='y2'
+                    ))
+                    
+                    fig.update_layout(
+                        title="Top 10 Transformadores - Painéis e Potência",
+                        xaxis_title="Transformador",
+                        yaxis_title="Número de Painéis",
+                        yaxis2=dict(
+                            title="Potência (kW)",
+                            overlaying='y',
+                            side='right'
+                        ),
+                        template="plotly_dark",
+                        height=400,
+                        separators=",.",
+                        hovermode='x unified'
+                    )
+                    
+                    apply_plotly_locale(fig)
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Informações técnicas
+                    with st.expander("ℹ️ Informações sobre a Detecção"):
+                        st.markdown(f"""
+                        ### Como funciona a detecção:
+                        
+                        1. **Detecção de Telhados**: Modelo YOLO fine-tuned identifica telhados em grid do Google Maps
+                        2. **Detecção de Painéis**: Modelo YOLO stage2 refinado detecta painéis nos telhados
+                        3. **Resolução**: ~0.6m/pixel (zoom 20) para máxima precisão
+                        4. **Cálculo**: Área do painel × 200 W/m² (eficiência padrão)
+                        
+                        ### Estatísticas da Subestação:
+                        - **Total de painéis**: {total_paineis:,}
+                        - **Área total**: {total_area:,.1f} m²
+                        - **Potência total**: {total_potencia:.2f} kW ({total_potencia/1000:.3f} MW)
+                        - **Transformadores com painéis**: {len(resultados)}
+                        - **Confiança média**: {int(confianca_geral * 100)}%
+                        
+                        ### Modelos Utilizados:
+                        - **Telhados**: `yolov8n_finetuned/weights/best.pt`
+                        - **Painéis**: `stage2_panel_solar_refined/weights/best.pt`
+                        """)
+                    
+            except Exception as e:
+                st.error(f"Erro ao carregar painéis: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
+                st.info("""
+                ### 🔍 Para detectar painéis solares:
+                
+                Use os endpoints da API:
+                1. `POST /api/v1/telhados/detectar` - Detectar telhados
+                2. `POST /api/v1/paineis-solares/detectar` - Detectar painéis
+                """)
+
+

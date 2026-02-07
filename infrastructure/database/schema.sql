@@ -1,9 +1,10 @@
 -- ============================================================================
 -- ENERGY NETLOAD MONITOR - SCHEMA UNIFICADO (APENAS TABELAS UTILIZADAS)
 -- ============================================================================
--- Data: 2026-02-05
+-- Data: 2026-02-07 (Atualizado)
 -- Descrição: Schema unificado contendo TODAS as tabelas realmente utilizadas
 -- Consolidação: schema.sql + schema_aneel_bdgd.sql mesclados em um único arquivo
+-- Adicionado: Tabelas de consumidores ANEEL (BT/MT/AT) com UPSERT support
 -- Removidas: 30+ tabelas não referenciadas + 4 tabelas ANEEL não utilizadas
 -- ============================================================================
 
@@ -133,6 +134,78 @@ CREATE TABLE IF NOT EXISTS subestacoes_aneel (
 
 -- Garantir que a sequência pertence à coluna
 ALTER SEQUENCE subestacoes_aneel_id_seq OWNED BY subestacoes_aneel.id;
+
+-- ============================================================================
+-- TABELAS DE CONSUMIDORES ANEEL (UNIDADES CONSUMIDORAS - BDGD)
+-- ============================================================================
+
+-- Consumidores de Baixa Tensão (BT)
+CREATE TABLE IF NOT EXISTS consumidores_bt_aneel (
+    id SERIAL PRIMARY KEY,
+    codigo VARCHAR(50) UNIQUE NOT NULL,
+    distribuidora VARCHAR(100) NOT NULL,
+    dist_codigo VARCHAR(50),
+    subestacao_codigo VARCHAR(50),
+    classe_subclasse_codigo VARCHAR(20),
+    tensao_fornecimento_codigo VARCHAR(20),
+    carga_instalada_kw DECIMAL(10, 2),
+    latitude DECIMAL(10, 8),
+    longitude DECIMAL(11, 8),
+    data_criacao TIMESTAMP DEFAULT NOW(),
+    data_atualizacao TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_consumidores_bt_distribuidora ON consumidores_bt_aneel(distribuidora);
+CREATE INDEX IF NOT EXISTS idx_consumidores_bt_subestacao ON consumidores_bt_aneel(subestacao_codigo);
+CREATE INDEX IF NOT EXISTS idx_consumidores_bt_coords ON consumidores_bt_aneel(latitude, longitude);
+
+-- Consumidores de Média Tensão (MT)
+CREATE TABLE IF NOT EXISTS consumidores_mt_aneel (
+    id SERIAL PRIMARY KEY,
+    codigo VARCHAR(50) UNIQUE NOT NULL,
+    distribuidora VARCHAR(100) NOT NULL,
+    dist_codigo VARCHAR(50),
+    subestacao_codigo VARCHAR(50),
+    circuito_mt_codigo VARCHAR(50),
+    classe_subclasse_codigo VARCHAR(20),
+    tensao_fornecimento_codigo VARCHAR(20),
+    carga_instalada_kw DECIMAL(10, 2),
+    demanda_contratada_kw DECIMAL(10, 2),
+    latitude DECIMAL(10, 8),
+    longitude DECIMAL(11, 8),
+    data_criacao TIMESTAMP DEFAULT NOW(),
+    data_atualizacao TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_consumidores_mt_distribuidora ON consumidores_mt_aneel(distribuidora);
+CREATE INDEX IF NOT EXISTS idx_consumidores_mt_subestacao ON consumidores_mt_aneel(subestacao_codigo);
+CREATE INDEX IF NOT EXISTS idx_consumidores_mt_coords ON consumidores_mt_aneel(latitude, longitude);
+
+-- Consumidores de Alta Tensão (AT)
+CREATE TABLE IF NOT EXISTS consumidores_at_aneel (
+    id SERIAL PRIMARY KEY,
+    codigo VARCHAR(50) UNIQUE NOT NULL,
+    distribuidora VARCHAR(100) NOT NULL,
+    dist_codigo VARCHAR(50),
+    subestacao_codigo VARCHAR(50),
+    circuito_at_codigo VARCHAR(50),
+    classe_subclasse_codigo VARCHAR(20),
+    tensao_fornecimento_codigo VARCHAR(20),
+    carga_instalada_kw DECIMAL(10, 2),
+    demanda_contratada_kw DECIMAL(10, 2),
+    latitude DECIMAL(10, 8),
+    longitude DECIMAL(11, 8),
+    data_criacao TIMESTAMP DEFAULT NOW(),
+    data_atualizacao TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_consumidores_at_distribuidora ON consumidores_at_aneel(distribuidora);
+CREATE INDEX IF NOT EXISTS idx_consumidores_at_subestacao ON consumidores_at_aneel(subestacao_codigo);
+CREATE INDEX IF NOT EXISTS idx_consumidores_at_coords ON consumidores_at_aneel(latitude, longitude);
+
+-- ============================================================================
+-- PROCESSAMENTO E CONTROLE
+-- ============================================================================
 
 CREATE TABLE IF NOT EXISTS aneel_bdgd_processamento (
     id SERIAL PRIMARY KEY,

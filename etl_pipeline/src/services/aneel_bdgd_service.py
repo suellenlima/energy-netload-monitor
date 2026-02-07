@@ -28,6 +28,16 @@ from sqlalchemy import create_engine, text
 logger = logging.getLogger(__name__)
 
 
+def truncate_string(value, max_length: int = 50) -> str:
+    """Trunca string para o tamanho máximo permitido"""
+    if value is None or pd.isna(value):
+        return None
+    str_val = str(value)
+    if len(str_val) > max_length:
+        return str_val[:max_length]
+    return str_val
+
+
 class GeometryService:
     """Operações geométricas e normalização"""
     
@@ -408,25 +418,26 @@ class ConsumerService:
     @staticmethod
     def extract_bt(gdf: gpd.GeoDataFrame, distribuidora: str) -> pd.DataFrame:
         """Extrai consumidores BT"""
-        logger.debug(f"Extraindo consumidores BT...")
+        logger.info(f"Extraindo consumidores BT... ({len(gdf)} registros brutos)")
         if gdf.empty:
             return pd.DataFrame()
         
+        logger.info(f"  Normalizando geometrias...")
         gdf, _ = GeometryService.normalize_geometry(gdf)
         
         df = pd.DataFrame()
         if 'COD_ID' in gdf.columns:
-            df['codigo'] = gdf['COD_ID'].astype(str)
-            df['distribuidora'] = distribuidora
+            df['codigo'] = gdf['COD_ID'].astype(str).apply(lambda x: truncate_string(x, 255))
+            df['distribuidora'] = truncate_string(distribuidora, 50)
             
             if 'DIST' in gdf.columns:
-                df['dist_codigo'] = gdf['DIST'].astype(str)
+                df['dist_codigo'] = gdf['DIST'].astype(str).apply(lambda x: truncate_string(x, 50))
             if 'SUB' in gdf.columns:
-                df['subestacao_codigo'] = gdf['SUB'].astype(str)
+                df['subestacao_codigo'] = gdf['SUB'].astype(str).apply(lambda x: truncate_string(x, 50))
             if 'CLAS_SUB' in gdf.columns:
-                df['classe_subclasse_codigo'] = gdf['CLAS_SUB'].astype(str)
+                df['classe_subclasse_codigo'] = gdf['CLAS_SUB'].astype(str).apply(lambda x: truncate_string(x, 50))
             if 'TEN_FORN' in gdf.columns:
-                df['tensao_fornecimento_codigo'] = gdf['TEN_FORN'].astype(str)
+                df['tensao_fornecimento_codigo'] = gdf['TEN_FORN'].astype(str).apply(lambda x: truncate_string(x, 50))
             if 'CAR_INST' in gdf.columns:
                 df['carga_instalada_kw'] = pd.to_numeric(gdf['CAR_INST'], errors='coerce')
             
@@ -451,19 +462,19 @@ class ConsumerService:
         
         df = pd.DataFrame()
         if 'COD_ID' in gdf.columns:
-            df['codigo'] = gdf['COD_ID'].astype(str)
-            df['distribuidora'] = distribuidora
+            df['codigo'] = gdf['COD_ID'].astype(str).apply(lambda x: truncate_string(x, 50))
+            df['distribuidora'] = truncate_string(distribuidora, 50)
             
             if 'DIST' in gdf.columns:
-                df['dist_codigo'] = gdf['DIST'].astype(str)
+                df['dist_codigo'] = gdf['DIST'].astype(str).apply(lambda x: truncate_string(x, 50))
             if 'SUB' in gdf.columns:
-                df['subestacao_codigo'] = gdf['SUB'].astype(str)
+                df['subestacao_codigo'] = gdf['SUB'].astype(str).apply(lambda x: truncate_string(x, 50))
             if 'CTMT' in gdf.columns:
-                df['circuito_mt_codigo'] = gdf['CTMT'].astype(str)
+                df['circuito_mt_codigo'] = gdf['CTMT'].astype(str).apply(lambda x: truncate_string(x, 50))
             if 'CLAS_SUB' in gdf.columns:
-                df['classe_subclasse_codigo'] = gdf['CLAS_SUB'].astype(str)
+                df['classe_subclasse_codigo'] = gdf['CLAS_SUB'].astype(str).apply(lambda x: truncate_string(x, 50))
             if 'TEN_FORN' in gdf.columns:
-                df['tensao_fornecimento_codigo'] = gdf['TEN_FORN'].astype(str)
+                df['tensao_fornecimento_codigo'] = gdf['TEN_FORN'].astype(str).apply(lambda x: truncate_string(x, 50))
             if 'CAR_INST' in gdf.columns:
                 df['carga_instalada_kw'] = pd.to_numeric(gdf['CAR_INST'], errors='coerce')
             if 'DEM_CONT' in gdf.columns:
@@ -490,19 +501,19 @@ class ConsumerService:
         
         df = pd.DataFrame()
         if 'COD_ID' in gdf.columns:
-            df['codigo'] = gdf['COD_ID'].astype(str)
-            df['distribuidora'] = distribuidora
+            df['codigo'] = gdf['COD_ID'].astype(str).apply(lambda x: truncate_string(x, 50))
+            df['distribuidora'] = truncate_string(distribuidora, 50)
             
             if 'DIST' in gdf.columns:
-                df['dist_codigo'] = gdf['DIST'].astype(str)
+                df['dist_codigo'] = gdf['DIST'].astype(str).apply(lambda x: truncate_string(x, 50))
             if 'SUB' in gdf.columns:
-                df['subestacao_codigo'] = gdf['SUB'].astype(str)
+                df['subestacao_codigo'] = gdf['SUB'].astype(str).apply(lambda x: truncate_string(x, 50))
             if 'CTAT' in gdf.columns:
-                df['circuito_at_codigo'] = gdf['CTAT'].astype(str)
+                df['circuito_at_codigo'] = gdf['CTAT'].astype(str).apply(lambda x: truncate_string(x, 50))
             if 'CLAS_SUB' in gdf.columns:
-                df['classe_subclasse_codigo'] = gdf['CLAS_SUB'].astype(str)
+                df['classe_subclasse_codigo'] = gdf['CLAS_SUB'].astype(str).apply(lambda x: truncate_string(x, 50))
             if 'TEN_FORN' in gdf.columns:
-                df['tensao_fornecimento_codigo'] = gdf['TEN_FORN'].astype(str)
+                df['tensao_fornecimento_codigo'] = gdf['TEN_FORN'].astype(str).apply(lambda x: truncate_string(x, 50))
             if 'CAR_INST' in gdf.columns:
                 df['carga_instalada_kw'] = pd.to_numeric(gdf['CAR_INST'], errors='coerce')
             if 'DEM_CONT' in gdf.columns:
@@ -520,66 +531,122 @@ class ConsumerService:
     
     def insert_bt(self, df: pd.DataFrame, distribuidora: str) -> int:
         """
-        Insere consumidores BT
+        Insere ou atualiza consumidores BT usando BATCH INSERT (OTIMIZADO)
         
         NOTA: Schema é gerenciado em infrastructure/database/schema.sql (unificado)
-        Este método APENAS insere dados, não cria/altera tabelas
+        Este método usa pandas to_sql() com batch para performance
         """
         if df.empty:
             return 0
         
-        inserted = 0
         try:
-            df.to_sql('consumidores_bt_aneel', self.engine, if_exists='append', index=False)
-            inserted = len(df)
-            logger.info(f"✓ {inserted} consumidores BT carregados")
+            logger.info(f"  Inserindo {len(df)} consumidores BT em batch...")
+            
+            # Usar to_sql com chunksize para inserir em lotes
+            df.to_sql(
+                'consumidores_bt_aneel', 
+                self.engine, 
+                if_exists='append', 
+                index=False,
+                chunksize=1000,  # Inserir em lotes de 1000
+                method='multi'  # Usar multi-row INSERT
+            )
+            
+            logger.info(f"✓ {len(df)} consumidores BT carregados")
+            return len(df)
         
         except Exception as e:
             logger.error(f"Erro ao carregar consumidores BT: {e}")
+            # Se erro por duplicatas, tentar row-by-row com UPSERT
+            if 'duplicate key' in str(e).lower() or 'unique constraint' in str(e).lower():
+                logger.warning(f"  Detectadas duplicatas, usando UPSERT...")
+                return self._insert_bt_upsert(df)
+            raise
+    
+    def _insert_bt_upsert(self, df: pd.DataFrame) -> int:
+        """Fallback: UPSERT linha por linha (mais lento, mas lida com duplicatas)"""
+        from sqlalchemy import text
+        inserted = 0
+        
+        with self.engine.connect() as conn:
+            for idx, row in df.iterrows():
+                if idx % 1000 == 0:
+                    logger.info(f"    Progresso UPSERT: {idx}/{len(df)} registros")
+                
+                stmt = text("""
+                    INSERT INTO consumidores_bt_aneel 
+                        (codigo, distribuidora, dist_codigo, subestacao_codigo, 
+                         classe_subclasse_codigo, tensao_fornecimento_codigo, 
+                         carga_instalada_kw, latitude, longitude, 
+                         data_criacao, data_atualizacao)
+                    VALUES 
+                        (:codigo, :dist, :dist_cod, :sub_cod, :classe, :tensao, 
+                         :carga, :lat, :lon, :cr, :au)
+                    ON CONFLICT (codigo) DO UPDATE SET
+                        distribuidora = EXCLUDED.distribuidora,
+                        dist_codigo = EXCLUDED.dist_codigo,
+                        subestacao_codigo = EXCLUDED.subestacao_codigo,
+                        classe_subclasse_codigo = EXCLUDED.classe_subclasse_codigo,
+                        tensao_fornecimento_codigo = EXCLUDED.tensao_fornecimento_codigo,
+                        carga_instalada_kw = EXCLUDED.carga_instalada_kw,
+                        latitude = EXCLUDED.latitude,
+                        longitude = EXCLUDED.longitude,
+                        data_atualizacao = EXCLUDED.data_atualizacao
+                """)
+                
+                conn.execute(stmt, {
+                    'codigo': str(row.get('codigo')),
+                    'dist': str(row.get('distribuidora')),
+                    'dist_cod': row.get('dist_codigo'),
+                    'sub_cod': row.get('subestacao_codigo'),
+                    'classe': row.get('classe_subclasse_codigo'),
+                    'tensao': row.get('tensao_fornecimento_codigo'),
+                    'carga': float(row.get('carga_instalada_kw')) if pd.notna(row.get('carga_instalada_kw')) else None,
+                    'lat': float(row.get('latitude')) if pd.notna(row.get('latitude')) else None,
+                    'lon': float(row.get('longitude')) if pd.notna(row.get('longitude')) else None,
+                    'cr': row.get('data_criacao'),
+                    'au': row.get('data_atualizacao')
+                })
+                inserted += 1
+            
+            conn.commit()
+        
+        logger.info(f"✓ {inserted} consumidores BT carregados via UPSERT")
+        return inserted
         
         return inserted
     
     def insert_mt(self, df: pd.DataFrame, distribuidora: str) -> int:
         """
-        Insere consumidores MT
-        
-        NOTA: Schema é gerenciado em infrastructure/database/schema.sql (unificado)
-        Este método APENAS insere dados, não cria/altera tabelas
+        Insere consumidores MT usando BATCH INSERT (OTIMIZADO)
         """
         if df.empty:
             return 0
         
-        inserted = 0
         try:
-            df.to_sql('consumidores_mt_aneel', self.engine, if_exists='append', index=False)
-            inserted = len(df)
-            logger.info(f"✓ {inserted} consumidores MT carregados")
-        
+            logger.info(f"  Inserindo {len(df)} consumidores MT em batch...")
+            df.to_sql('consumidores_mt_aneel', self.engine, if_exists='append', index=False, chunksize=1000, method='multi')
+            logger.info(f"✓ {len(df)} consumidores MT carregados")
+            return len(df)
         except Exception as e:
             logger.error(f"Erro ao carregar consumidores MT: {e}")
-        
-        return inserted
+            raise
     
     def insert_at(self, df: pd.DataFrame, distribuidora: str) -> int:
         """
-        Insere consumidores AT
-        
-        NOTA: Schema é gerenciado em infrastructure/database/schema.sql (unificado)
-        Este método APENAS insere dados, não cria/altera tabelas
+        Insere consumidores AT usando BATCH INSERT (OTIMIZADO)
         """
         if df.empty:
             return 0
         
-        inserted = 0
         try:
-            df.to_sql('consumidores_at_aneel', self.engine, if_exists='append', index=False)
-            inserted = len(df)
-            logger.info(f"✓ {inserted} consumidores AT carregados")
-        
+            logger.info(f"  Inserindo {len(df)} consumidores AT em batch...")
+            df.to_sql('consumidores_at_aneel', self.engine, if_exists='append', index=False, chunksize=1000, method='multi')
+            logger.info(f"✓ {len(df)} consumidores AT carregados")
+            return len(df)
         except Exception as e:
             logger.error(f"Erro ao carregar consumidores AT: {e}")
-        
-        return inserted
+            raise
 
 
 class DistributorService:
