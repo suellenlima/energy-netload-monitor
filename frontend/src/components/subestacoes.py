@@ -60,17 +60,17 @@ def render_tab_subestacoes_ons(client: ApiClient, distribuidora: str | None, lim
     """
     Exibe tabela de subestações oficiais do ONS.
     """
-    # result = client.get("/subestacoes/ons", params={"distribuidora": distribuidora, "limite": limite})
+    result = client.get("/subestacoes/ons", params={"distribuidora": distribuidora, "limite": limite})
     
-    # if result.error:
-    #     st.error(f"Erro ao buscar subestações ONS: {result.error}")
-    #     return
+    if result.error:
+        st.error(f"Erro ao buscar subestações ONS: {result.error}")
+        return
     
-    # if not result.data:
-    #     st.info("Nenhuma subestação ONS encontrada.")
-    #     return
+    if not result.data:
+        st.info("Nenhuma subestação ONS encontrada.")
+        return
     
-    # df = pd.DataFrame(result.data)
+    df = pd.DataFrame(result.data)
     
     # Sanitizar tipos de dados
     if "tensao_kv" in df.columns:
@@ -284,20 +284,44 @@ def render_analise_local_subestacao(client: ApiClient, distribuidora: str | None
     if distribuidora:
         params["distribuidora"] = distribuidora
 
-    result = client.get("/subestacoes/detectadas", params={**params, "limite": 500})
+    result = client.get("/subestacoes/ons", params={**params, "limite": 500})
 
-    if result.error or not result.data:
-        st.warning("Nenhuma subestação disponível. Execute a detecção primeiro.")
+    if result.error:
+        st.error(f"Erro ao buscar subestações: {result.error}")
+        return
+        
+    if not result.data:
+        if distribuidora:
+            st.warning(f"⚠️ Nenhuma subestação encontrada para a distribuidora **'{distribuidora}'**")
+            st.info("💡 **Dica**: O sistema busca por partes do nome (ex: 'LIGHT' encontra 'LIGHT SESA')")
+            
+            # Sugerir buscar todas
+            if st.button("🔍 Mostrar todas as subestações disponíveis"):
+                result_all = client.get("/subestacoes/ons", params={"limite": 20})
+                if result_all.data:
+                    st.write("**Primeiras 20 subestações cadastradas:**")
+                    df_sample = pd.DataFrame(result_all.data)
+                    st.dataframe(df_sample[["nome", "distribuidora", "tensao_kv"]].head(20), use_container_width=True)
+        else:
+            st.warning("Nenhuma subestação cadastrada no sistema.")
         return
 
     subestacoes = result.data
     df_subs = pd.DataFrame(subestacoes)
 
+    # Debug info
+    with st.expander(f"ℹ️ Debug: {len(subestacoes)} subestações encontradas"):
+        st.write(f"**Filtro aplicado**: {distribuidora or 'Sem filtro'}")
+        st.write(f"**Total de registros**: {len(subestacoes)}")
+        if distribuidora and len(subestacoes) > 0:
+            distribuidoras_unicas = df_subs["distribuidora"].unique()
+            st.write(f"**Distribuidoras encontradas**: {', '.join(distribuidoras_unicas[:5])}")
+
     # Seletor de subestação
     if not df_subs.empty:
         # Criar display com nome + ID
         df_subs["display"] = df_subs.apply(
-            lambda row: f"{row.get('nome', 'SE ' + str(row['id']))} (ID: {row['id']})",
+            lambda row: f"{row.get('nome', 'SE ' + str(row['id']))} (ID: {row['id']}) - {row.get('tensao_kv', 0):.0f} kV - {row.get('distribuidora', 'N/A')}",
             axis=1
         )
         subestacao_selecionada = st.selectbox(
@@ -315,82 +339,207 @@ def render_analise_local_subestacao(client: ApiClient, distribuidora: str | None
     # st.divider()
 
     # Tab de análises
-    # tab_mix, tab_carga, tab_comparativo = st.tabs([
-    #     "📊 Mix de Consumidores",
-    #     "📈 Carga Sintética",
-    #     "⚖️ Comparativos"
-    # ])
-
-    tab_mix, tab_carga, tab_mapa = st.tabs([
-        "📊 Mix de Consumidores",
-        "📈 Carga Sintética",
+    tab_visao, tab_carga, tab_geo = st.tabs([
+        "📊 Visão Geral",
+        "📈 Curva de Carga",
         "🗺️ Mapa"
     ])
 
-    # Tab: Mix de Consumidores
-    with tab_mix:
-        st.subheader("Mix de Unidades Consumidoras")
-
-        mix_result = client.get(f"/subestacoes/{subestacao_id}/mix-consumidores")
-
-        if mix_result.error:
-            st.error(f"Erro: {mix_result.error}")
-        elif not mix_result.data or not mix_result.data.get("mix"):
-            st.warning("Nenhuma UC associada a esta subestação. Execute 'Associar UCs' primeiro.")
+    # Tab: Visão Geral da Subestação (replicando a visão do distribuidor)
+    with tab_visao:
+        st.subheader("📊 Visão Geral da Subestação")
+        
+        # Buscar dados consolidados
+        visao_result = client.get(f"/subestacoes/{subestacao_id}/visao-geral")
+        
+        if visao_result.error:
+            st.error(f"Erro: {visao_result.error}")
+        elif not visao_result.data:
+            st.warning("Nenhum dado disponível para esta subestação.")
         else:
-            mix_data = mix_result.data
-            mix = mix_data.get("mix", {})
-            totais = mix_data.get("totais", {})
-
-            # Métricas totais
-            col_a, col_b, col_c = st.columns(3)
-            with col_a:
-                st.metric("Total de Instalações", format_integer(totais.get('qtd_instalacoes', 0)))
-            with col_b:
-                st.metric("Total de UCs", format_integer(totais.get('qtd_unidades_consumidoras', 0)))
-            with col_c:
-                st.metric("Potência Total", format_mw(totais.get('potencia_total_mw', 0), decimals=2))
-
-            # Gráfico de pizza
-            if mix:
-                labels = list(mix.keys())
-                values = [mix[classe]["potencia_total_mw"] for classe in labels]
-
-                fig = go.Figure(data=[go.Pie(
-                    labels=labels,
-                    values=values,
-                    hole=0.4,
-                    textinfo='label+percent'
-                )])
-
-                fig.update_layout(
-                    title="Distribuição de Potência por Classe",
-                    template="plotly_dark",
-                    separators=",."
+            visao_data = visao_result.data
+            subestacao_info = visao_data.get("subestacao", {})
+            carga_info = visao_data.get("carga", {})
+            mmgd_info = visao_data.get("mmgd", {})
+            consumidores_info = visao_data.get("consumidores", {})
+            
+            # Header com informações da subestação
+            st.markdown(f"### {subestacao_info.get('nome', 'Subestação')} - {subestacao_info.get('distribuidora', 'N/A')}")
+            
+            # ===== KPIs PRINCIPAIS (similar à Visão Geral do distribuidor) =====
+            st.markdown("#### 📊 Indicadores Principais")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                carga_pico = carga_info.get("pico_mw", 0)
+                hora_pico = carga_info.get("hora_pico", 0)
+                st.metric(
+                    "⚡ Carga de Pico",
+                    format_mw(carga_pico, decimals=1),
+                    delta=f"Hora: {hora_pico}h",
+                    help="Máxima demanda estimada na subestação"
                 )
-
-                apply_plotly_locale(fig)
-                st.plotly_chart(fig, use_container_width=True)
-
-                # Tabela detalhada
-                st.subheader("Detalhamento por Classe")
+            
+            with col2:
+                mmgd_detectada = mmgd_info.get("potencia_detectada_mw", 0)
+                paineis_count = mmgd_info.get("paineis_count", 0)
+                confianca = mmgd_info.get("confianca_media", 0)
+                
+                if paineis_count > 0:
+                    delta_text = f"{paineis_count:,} painéis (conf: {int(confianca * 100)}%)"
+                else:
+                    delta_text = "Aguardando detecção"
+                
+                st.metric(
+                    "☀️ MMGD Detectada",
+                    format_mw(mmgd_detectada, decimals=1),
+                    delta=delta_text,
+                    help="Potência de painéis solares detectados por IA"
+                )
+            
+            with col3:
+                # Calcular capacidade estimada baseada no pico
+                # Assumindo que 85% da capacidade é utilizada no pico
+                capacidade_estimada = carga_pico / 0.85 if carga_pico > 0 else 0
+                st.metric(
+                    "⚡ Capacidade Estimada",
+                    format_mw(capacidade_estimada, decimals=1),
+                    help="Capacidade instalada estimada da subestação"
+                )
+            
+            with col4:
+                fator_carga = carga_info.get("fator_carga", 0)
+                st.metric(
+                    "📊 Fator de Carga",
+                    format_factor(fator_carga, decimals=2),
+                    help="Relação entre carga média e pico"
+                )
+            
+            st.divider()
+            
+            # ===== MIX DE CONSUMIDORES =====
+            st.markdown("#### 🏘️ Mix de Unidades Consumidoras")
+            
+            if consumidores_info.get("erro"):
+                st.warning(f"⚠️ {consumidores_info.get('erro')}. Execute 'Associar UCs' primeiro.")
+                mix = {}  # Definir mix vazio
+            elif consumidores_info.get("total_ucs", 0) == 0:
+                st.info("Nenhuma UC associada a esta subestação. Execute 'Associar UCs' primeiro.")
+                mix = {}  # Definir mix vazio
+            else:
+                # Métricas totais
+                col_a, col_b, col_c = st.columns(3)
+                with col_a:
+                    st.metric("Total de Instalações", format_integer(consumidores_info.get('total_instalacoes', 0)))
+                with col_b:
+                    st.metric("Total de UCs", format_integer(consumidores_info.get('total_ucs', 0)))
+                with col_c:
+                    st.metric("Potência Total", format_mw(consumidores_info.get('potencia_total_mw', 0), decimals=2))
+                
+                # Gráfico de pizza
+                mix = consumidores_info.get("mix_por_classe", {})
+                if mix:
+                    labels = list(mix.keys())
+                    values = [mix[classe]["potencia_total_mw"] for classe in labels]
+                    
+                    fig = go.Figure(data=[go.Pie(
+                        labels=labels,
+                        values=values,
+                        hole=0.4,
+                        textinfo='label+percent'
+                    )])
+                    
+                    fig.update_layout(
+                        title="Distribuição de Potência por Classe",
+                        template="plotly_dark",
+                        separators=",."
+                    )
+                    
+                    apply_plotly_locale(fig)
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Tabela detalhada
+                    st.subheader("Detalhamento por Classe")
+                    for classe, dados in mix.items():
+                        with st.expander(f"📌 {classe}"):
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Instalações", format_integer(dados['qtd_instalacoes']))
+                            with col2:
+                                st.metric("UCs", format_integer(dados['qtd_unidades_consumidoras']))
+                            with col3:
+                                st.metric("Potência", format_mw(dados['potencia_total_mw'], decimals=2))
+                            
+                            # Por tipo
+                            if "por_tipo" in dados:
+                                st.write("**Por tipo de estabelecimento:**")
+                                df_tipo = pd.DataFrame(dados["por_tipo"]).T
+                                st.dataframe(df_tipo, use_container_width=True)
+            
+            st.divider()
+            
+            # ===== ANÁLISE POR ESTABELECIMENTOS =====
+            st.markdown("#### 🏢 Análise por Tipo de Estabelecimento")
+            
+            if mix and consumidores_info.get("total_ucs", 0) > 0:
+                # Agregar dados por tipo de estabelecimento
+                estabelecimentos_data = {}
                 for classe, dados in mix.items():
-                    with st.expander(f"📌 {classe}"):
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Instalações", format_integer(dados['qtd_instalacoes']))
-                        with col2:
-                            st.metric("UCs", format_integer(dados['qtd_unidades_consumidoras']))
-                        with col3:
-                            st.metric("Potência", format_mw(dados['potencia_total_mw'], decimals=2))
+                    if "por_tipo" in dados:
+                        for tipo, info in dados["por_tipo"].items():
+                            if tipo not in estabelecimentos_data:
+                                estabelecimentos_data[tipo] = {
+                                    "qtd_instalacoes": 0,
+                                    "qtd_unidades_consumidoras": 0,
+                                    "potencia_total_mw": 0
+                                }
+                            estabelecimentos_data[tipo]["qtd_instalacoes"] += info.get("qtd_instalacoes", 0)
+                            estabelecimentos_data[tipo]["qtd_unidades_consumidoras"] += info.get("qtd_unidades_consumidoras", 0)
+                            estabelecimentos_data[tipo]["potencia_total_mw"] += info.get("potencia_total_mw", 0)
+                
+                if estabelecimentos_data:
+                    # Criar DataFrame para visualização
+                    df_estab = pd.DataFrame.from_dict(estabelecimentos_data, orient='index')
+                    df_estab = df_estab.sort_values('potencia_total_mw', ascending=False)
+                    
+                    # Top 10 estabelecimentos
+                    df_top10 = df_estab.head(10)
+                    
+                    # Gráfico de barras
+                    fig_estab = go.Figure(data=[
+                        go.Bar(
+                            x=df_top10.index,
+                            y=df_top10['potencia_total_mw'],
+                            text=df_top10['potencia_total_mw'].apply(lambda x: f"{x:.2f} MW"),
+                            textposition='auto',
+                            marker_color='lightblue'
+                        )
+                    ])
+                    
+                    fig_estab.update_layout(
+                        title="Top 10 Estabelecimentos por Potência",
+                        xaxis_title="Tipo de Estabelecimento",
+                        yaxis_title="Potência (MW)",
+                        template="plotly_dark",
+                        height=400,
+                        separators=",."
+                    )
+                    
+                    apply_plotly_locale(fig_estab)
+                    st.plotly_chart(fig_estab, use_container_width=True)
+                    
+                    # Tabela detalhada
+                    with st.expander("📋 Ver todos os estabelecimentos"):
+                        df_display = df_estab.copy()
+                        df_display.columns = ["Instalações", "UCs", "Potência (MW)"]
+                        df_display["Potência (MW)"] = df_display["Potência (MW)"].apply(lambda x: f"{x:.2f}")
+                        st.dataframe(df_display, use_container_width=True)
+                else:
+                    st.info("Nenhum dado de estabelecimentos disponível")
+            else:
+                st.info("Associe UCs primeiro para ver análise de estabelecimentos")
 
-                        # Por tipo
-                        if "por_tipo" in dados:
-                            st.write("**Por tipo de estabelecimento:**")
-                            df_tipo = pd.DataFrame(dados["por_tipo"]).T
-                            st.dataframe(df_tipo, use_container_width=True)
-
-    # Tab: Carga Sintética
+    # Tab: Curva de Carga Sintética
     with tab_carga:
         st.subheader("Curva de Carga Sintética (24h)")
 
@@ -489,6 +638,152 @@ def render_analise_local_subestacao(client: ApiClient, distribuidora: str | None
                         with col3:
                             st.metric("Média", format_kw(dados['media_kw'], decimals=1))
 
-    # Tab: Comparativos
-    with tab_mapa:
-        render_tab_mapa_subestacoes(client)
+    # Tab: Mapa
+    with tab_geo:
+        st.subheader("🗺️ Mapa de Transformadores da Subestação")
+        
+        # Buscar transformadores
+        transf_result = client.get(f"/subestacoes/{subestacao_id}/transformadores")
+        
+        if transf_result.error:
+            st.error(f"Erro ao buscar transformadores: {transf_result.error}")
+        elif not transf_result.data or not transf_result.data.get("transformadores"):
+            st.warning("Nenhum transformador encontrado para esta subestação.")
+            st.info("Os transformadores são obtidos dos dados BDGD da ANEEL.")
+        else:
+            import folium
+            from streamlit_folium import st_folium
+            
+            transformadores = transf_result.data.get("transformadores", [])
+            total = transf_result.data.get("total", 0)
+            
+            st.info(f"📍 **{total} transformadores** encontrados nesta subestação")
+            
+            # Filtrar transformadores com coordenadas válidas
+            transf_validos = [
+                t for t in transformadores 
+                if t.get("latitude") and t.get("longitude")
+            ]
+            
+            if not transf_validos:
+                st.warning("Nenhum transformador possui coordenadas geográficas válidas.")
+            else:
+                # Calcular centro do mapa
+                lats = [t["latitude"] for t in transf_validos]
+                lngs = [t["longitude"] for t in transf_validos]
+                center_lat = sum(lats) / len(lats)
+                center_lng = sum(lngs) / len(lngs)
+                
+                # Criar mapa
+                m = folium.Map(
+                    location=[center_lat, center_lng],
+                    zoom_start=13,
+                    tiles="OpenStreetMap"
+                )
+                
+                # Adicionar marcadores para cada transformador
+                for idx, transf in enumerate(transf_validos):
+                    lat = transf["latitude"]
+                    lng = transf["longitude"]
+                    transf_id = transf.get("id", idx)
+                    codigo = transf.get("codigo", f"T-{transf_id}")
+                    potencia = transf.get("potencia_kva", 0)
+                    
+                    # Popup com informações
+                    popup_html = f"""
+                    <div style="font-family: Arial; font-size: 12px; min-width: 200px;">
+                        <h4 style="margin: 0 0 10px 0; color: #1f77b4;">⚡ Transformador</h4>
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <tr>
+                                <td style="padding: 3px; font-weight: bold;">ID:</td>
+                                <td style="padding: 3px;">{transf_id}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 3px; font-weight: bold;">Código:</td>
+                                <td style="padding: 3px;">{codigo}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 3px; font-weight: bold;">Potência:</td>
+                                <td style="padding: 3px;">{potencia:.1f} kVA</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 3px; font-weight: bold;">Lat/Lng:</td>
+                                <td style="padding: 3px;">{lat:.5f}, {lng:.5f}</td>
+                            </tr>
+                        </table>
+                    </div>
+                    """
+                    
+                    # Cor baseada na potência
+                    if potencia > 100:
+                        color = 'red'
+                    elif potencia > 50:
+                        color = 'orange'
+                    else:
+                        color = 'blue'
+                    
+                    folium.Marker(
+                        location=[lat, lng],
+                        popup=folium.Popup(popup_html, max_width=250),
+                        tooltip=f"🔌 {codigo} - {potencia:.0f} kVA",
+                        icon=folium.Icon(color=color, icon='bolt', prefix='fa')
+                    ).add_to(m)
+                
+                # Renderizar mapa e capturar cliques
+                st.caption("💡 **Dica**: Clique nos marcadores para ver detalhes do transformador")
+                
+                map_data = st_folium(
+                    m,
+                    width=None,
+                    height=500,
+                    returned_objects=["last_object_clicked"]
+                )
+                
+                # Mostrar informações do transformador clicado
+                if map_data and map_data.get("last_object_clicked"):
+                    clicked_lat = map_data["last_object_clicked"]["lat"]
+                    clicked_lng = map_data["last_object_clicked"]["lng"]
+                    
+                    # Encontrar o transformador clicado
+                    transf_clicado = None
+                    for t in transf_validos:
+                        if abs(t["latitude"] - clicked_lat) < 0.00001 and abs(t["longitude"] - clicked_lng) < 0.00001:
+                            transf_clicado = t
+                            break
+                    
+                    if transf_clicado:
+                        st.divider()
+                        st.markdown("### 📌 Transformador Selecionado")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            st.metric("ID", transf_clicado.get("id", "N/A"))
+                        with col2:
+                            st.metric("Código", transf_clicado.get("codigo", "N/A"))
+                        with col3:
+                            st.metric("Potência", f"{transf_clicado.get('potencia_kva', 0):.1f} kVA")
+                        with col4:
+                            status = transf_clicado.get("status", "Desconhecido")
+                            st.metric("Status", status)
+                        
+                        # Detalhes adicionais em expander
+                        with st.expander("🔍 Ver mais detalhes"):
+                            st.json(transf_clicado)
+                
+                # Estatísticas dos transformadores
+                st.divider()
+                st.markdown("### 📊 Estatísticas dos Transformadores")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    potencia_total = sum(t.get("potencia_kva", 0) for t in transf_validos)
+                    st.metric("Potência Total", f"{potencia_total:.1f} kVA")
+                
+                with col2:
+                    potencia_media = potencia_total / len(transf_validos) if transf_validos else 0
+                    st.metric("Potência Média", f"{potencia_media:.1f} kVA")
+                
+                with col3:
+                    st.metric("Com Coordenadas", f"{len(transf_validos)}/{total}")

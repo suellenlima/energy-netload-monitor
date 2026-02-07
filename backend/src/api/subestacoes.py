@@ -71,25 +71,82 @@ def get_repository():
     return _repository
 
 
-@router.get("/ons", response_model=list[SubestacaoONSResponse])
+@router.get("/ons")
 def get_subestacoes_ons(
     distribuidora: DistribuidoraQuery = None,
     limite: LimiteQuery = 100,
     repository = Depends(get_repository)
 ):
     """
-    Lista subestações do ONS (dados públicos oficiais) - Migrado para DDD.
+    Lista subestações ANEEL/ONS - Com busca flexível por LIKE.
 
-    - **distribuidora**: Filtrar por distribuidora (opcional)
+    - **distribuidora**: Filtrar por distribuidora (opcional, usa LIKE)
     - **limite**: Máximo de registros (default 100)
     """
     try:
-        use_case = ObtenerONSSubestacioesUseCase(repository=repository)
-        resultado = use_case.executar(
-            distribuidora_codigo=distribuidora,
-            limite=limite
-        )
-        return resultado['items']
+        from sqlalchemy import text
+        engine = get_engine()
+        
+        with engine.connect() as conn:
+            if distribuidora:
+                # Limpar o nome da distribuidora de espaços extras
+                dist_clean = distribuidora.strip()
+                
+                # Log para debug
+                logger.info(f"Buscando subestações para distribuidora: '{dist_clean}'")
+                
+                # Busca flexível com LIKE
+                query = text("""
+                    SELECT 
+                        id,
+                        nome,
+                        codigo,
+                        distribuidora,
+                        tensao_kv,
+                        latitude,
+                        longitude,
+                        ativo
+                    FROM subestacoes_aneel
+                    WHERE UPPER(distribuidora) LIKE UPPER(:dist)
+                    ORDER BY nome
+                    LIMIT :limite
+                """)
+                result = conn.execute(query, {"dist": f"%{dist_clean}%", "limite": limite})
+            else:
+                query = text("""
+                    SELECT 
+                        id,
+                        nome,
+                        codigo,
+                        distribuidora,
+                        tensao_kv,
+                        latitude,
+                        longitude,
+                        ativo
+                    FROM subestacoes_aneel
+                    ORDER BY nome
+                    LIMIT :limite
+                """)
+                result = conn.execute(query, {"limite": limite})
+            
+            subestacoes = []
+            for row in result:
+                subestacoes.append({
+                    "id": row[0],  # Retorna como int (sem response_model validation)
+                    "nome": row[1] or f"SE {row[0]}",
+                    "codigo": row[2] or "",
+                    "sigla_se": row[2] or "",
+                    "distribuidora": row[3] or "N/A",
+                    "tensao_kv": float(row[4]) if row[4] else 0.0,
+                    "latitude": float(row[5]) if row[5] else None,
+                    "longitude": float(row[6]) if row[6] else None,
+                    "subsistema": row[3] or "N/A",
+                    "ativo": row[7] if row[7] is not None else True
+                })
+            
+            logger.info(f"Encontradas {len(subestacoes)} subestações para distribuidora '{distribuidora}'")
+            return subestacoes
+            
     except Exception as exc:
         logger.error(f"Erro ao buscar subestações ONS: {exc}", exc_info=True)
         raise DatabaseError("Falha ao buscar subestações ONS") from exc
@@ -345,13 +402,12 @@ def get_subestacao_transformadores(
         use_case = ObtenerTransformadoresUseCase(repository=repository)
         resultado = use_case.executar(subestacao_id=id)
         
-        if not resultado.get('dados'):
-            raise DatabaseError(f"Subestação {id} não encontrada ou sem transformadores")
-        
+        # Retorna lista mesmo se vazia (não é erro)
         return {
             "subestacao_id": id,
-            "total": len(resultado['dados']),
-            "transformadores": resultado['dados']
+            "total": len(resultado.get('dados', [])),
+            "transformadores": resultado.get('dados', []),
+            "mensagem": resultado.get('mensagem', 'Consulta realizada com sucesso')
         }
         
     except Exception as exc:
@@ -495,6 +551,161 @@ def get_carga_sintetica_subestacao(
     except Exception as exc:
         logger.error(f"Erro ao calcular carga sintética: {exc}", exc_info=True)
         raise DatabaseError("Falha ao calcular carga sintética") from exc
+
+
+@router.get("/{subestacao_id}/visao-geral")
+def get_visao_geral_subestacao(
+    subestacao_id: int,
+    repository = Depends(get_repository)
+):
+    """
+    Retorna visão geral consolidada de uma subestação.
+    
+    Agrega dados de:
+    - Carga sintética (curva horária)
+    - Mix de consumidores por classe
+    - MMGD detectada na área
+    - Estatísticas gerais
+    
+    - **subestacao_id**: ID da subestação
+    
+    **Response**:
+    ```json
+    {
+      "subestacao": {
+        "id": 123,
+        "nome": "SE Centro",
+        "distribuidora": "LIGHT"
+      },
+      "carga": {
+        "curva_horaria_mw": [...],
+        "pico_mw": 12.5,
+        "media_mw": 8.3,
+        "fator_carga": 0.66
+      },
+      "mmgd": {
+        "potencia_detectada_mw": 2.3,
+        "paineis_count": 450,
+        "confianca_media": 0.89
+      },
+      "consumidores": {
+        "total_ucs": 6000,
+        "mix_por_classe": {...}
+      }
+    }
+    ```
+    """
+    try:
+        from sqlalchemy import text
+        engine = get_engine()
+        
+        # Buscar informações básicas da subestação
+        with engine.connect() as conn:
+            # Informações da subestação (usando subestacoes_aneel)
+            query_sub = text("""
+                SELECT 
+                    id,
+                    nome,
+                    distribuidora,
+                    tensao_kv,
+                    codigo
+                FROM subestacoes_aneel
+                WHERE id = :id
+            """)
+            result_sub = conn.execute(query_sub, {"id": subestacao_id}).fetchone()
+            
+            if not result_sub:
+                raise HTTPException(status_code=404, detail="Subestação não encontrada")
+            
+            subestacao_info = {
+                "id": result_sub[0],
+                "nome": result_sub[1] or f"Subestação {result_sub[0]}",
+                "distribuidora": result_sub[2] or "N/A",
+                "tensao_kv": float(result_sub[3] or 0),
+                "codigo": result_sub[4] or ""
+            }
+            
+            # MMGD detectada (painéis solares) - direto da subestação
+            query_paineis = text("""
+                SELECT 
+                    COUNT(*) as total_paineis,
+                    COALESCE(SUM(potencia_w), 0) / 1000000.0 as potencia_mw,
+                    COALESCE(AVG(confianca), 0) as confianca_media
+                FROM paineis_solares_detectados
+                WHERE subestacao_id = :id
+            """)
+            result_paineis = conn.execute(query_paineis, {"id": subestacao_id}).fetchone()
+            
+            mmgd_info = {
+                "potencia_detectada_mw": float(result_paineis[1] or 0),
+                "paineis_count": int(result_paineis[0] or 0),
+                "confianca_media": float(result_paineis[2] or 0)
+            }
+            
+            # Contar transformadores associados
+            query_transformadores = text("""
+                SELECT COUNT(*) 
+                FROM transformadores_aneel 
+                WHERE subestacao_id = :id
+            """)
+            result_transf = conn.execute(query_transformadores, {"id": subestacao_id}).fetchone()
+            subestacao_info["total_transformadores"] = int(result_transf[0] or 0)
+        
+        # Buscar carga sintética e mix de consumidores usando use cases existentes
+        try:
+            carga_use_case = ObtenerCargaSinteticaUseCase(repository=repository)
+            carga_data = carga_use_case.executar(subestacao_id=subestacao_id)
+            
+            carga_info = {
+                "curva_horaria_mw": carga_data.get("curva_horaria_mw", []),
+                "pico_mw": carga_data.get("estatisticas", {}).get("pico_kw", 0) / 1000.0,
+                "media_mw": carga_data.get("estatisticas", {}).get("media_kw", 0) / 1000.0,
+                "vale_mw": carga_data.get("estatisticas", {}).get("vale_kw", 0) / 1000.0,
+                "fator_carga": carga_data.get("estatisticas", {}).get("fator_carga", 0),
+                "hora_pico": carga_data.get("estatisticas", {}).get("hora_pico", 0)
+            }
+        except:
+            carga_info = {
+                "curva_horaria_mw": [],
+                "pico_mw": 0,
+                "media_mw": 0,
+                "vale_mw": 0,
+                "fator_carga": 0,
+                "hora_pico": 0,
+                "erro": "Associe UCs primeiro"
+            }
+        
+        try:
+            mix_use_case = ObtenerMixConsumidoresUseCase(repository=repository)
+            mix_data = mix_use_case.executar(subestacao_id=subestacao_id)
+            
+            consumidores_info = {
+                "total_ucs": mix_data.get("totais", {}).get("qtd_unidades_consumidoras", 0),
+                "total_instalacoes": mix_data.get("totais", {}).get("qtd_instalacoes", 0),
+                "potencia_total_mw": mix_data.get("totais", {}).get("potencia_total_mw", 0),
+                "mix_por_classe": mix_data.get("mix", {})
+            }
+        except:
+            consumidores_info = {
+                "total_ucs": 0,
+                "total_instalacoes": 0,
+                "potencia_total_mw": 0,
+                "mix_por_classe": {},
+                "erro": "Associe UCs primeiro"
+            }
+        
+        return {
+            "subestacao": subestacao_info,
+            "carga": carga_info,
+            "mmgd": mmgd_info,
+            "consumidores": consumidores_info
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Erro ao buscar visão geral da subestação {subestacao_id}: {exc}", exc_info=True)
+        raise DatabaseError(f"Falha ao buscar visão geral: {str(exc)}") from exc
 
 
 # ============================================================================
