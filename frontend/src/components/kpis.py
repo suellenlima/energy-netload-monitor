@@ -275,25 +275,22 @@ def render_executive_kpis(
             col1, col2, col3, col4, col5 = st.columns(5)
 
             with col1:
-                # Formatar delta da carga
-                if delta_carga is not None and delta_carga != 0:
-                    delta_text = f"{delta_carga:+.1f} MW vs ontem"
-                else:
-                    delta_text = "Tempo real diário"
+                # Usar MMGD como delta
+                delta_text = f"+{geracao_mmgd:,.1f} MW MMGD"
                 
                 st.metric(
-                    label="Carga Instantânea",
+                    label="Demanda Estimada",
                     value=f"~{carga_ons:,.1f} MW",
                     delta=delta_text,
-                    help="Carga Granular total da distribuidora (medida)"
+                    help="Demanda calculada baseada em transformadores ANEEL, consumo granular e MMGD para o dia atual"
                 )
 
             with col2:
                 st.metric(
-                    label="Consumo Estimado",
+                    label="Carga Total",
                     value=f"~{consumo_estimado:,.1f} MW",
                     delta=f"+{geracao_mmgd:,.1f} MW MMGD",
-                    help="Granular"
+                    help="Soma da carga granular + carga líquida (demanda total da distribuidora)"
                 )
 
             with col3:
@@ -318,7 +315,7 @@ def render_executive_kpis(
                 delta_text_aneel = f"{utilizacao:.1f}% utilização"
                 
                 st.metric(
-                    label="Potência Total (ANEEL)",
+                    label="Potência Total",
                     value=f"{carga_aneel:,.1f} MW",
                     delta=delta_text_aneel,
                     help="Potência total instalada da distribuidora (capacidade)"
@@ -363,9 +360,9 @@ def render_executive_kpis(
 
                 with col1:
                     st.metric(
-                        label="Carga Líquida (Última)",
+                        label="Carga Proporcional",
                         value=f"{carga_ons:,.1f} MW",
-                        help="Última medição da carga líquida ONS"
+                        help="Última carga calculada proporcionalmente (baseada em transformadores ANEEL)"
                     )
 
                 with col2:

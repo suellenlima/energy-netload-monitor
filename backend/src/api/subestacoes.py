@@ -60,6 +60,9 @@ router = APIRouter(prefix="/subestacoes", tags=["Subestações"])
 # DDD router (novos endpoints)
 router_ddd = APIRouter(prefix="/api/v1/subestacoes", tags=["Subestações (DDD)"])
 
+# Router para endpoints de transformadores (sem prefixo de subestacao)
+router_transformadores = APIRouter(prefix="/api/v1/transformadores", tags=["Transformadores"])
+
 # Repository singleton
 _repository = None
 
@@ -728,12 +731,13 @@ def get_visao_geral_subestacao(
             mix_data = mix_use_case.executar(subestacao_id=subestacao_id)
             
             consumidores_info = {
-                "total_ucs": mix_data.get("totais", {}).get("qtd_unidades_consumidoras", 0),
-                "total_instalacoes": mix_data.get("totais", {}).get("qtd_instalacoes", 0),
-                "potencia_total_mw": mix_data.get("totais", {}).get("potencia_total_mw", 0),
-                "mix_por_classe": mix_data.get("mix", {})
+                "total_ucs": mix_data.get("total_ucs", 0),
+                "total_instalacoes": mix_data.get("total_instalacoes", 0),
+                "potencia_total_mw": mix_data.get("potencia_total_mw", 0),
+                "mix_por_classe": mix_data.get("mix_por_classe", {})
             }
-        except:
+        except Exception as e:
+            logger.error(f"Erro ao buscar mix de consumidores: {e}", exc_info=True)
             consumidores_info = {
                 "total_ucs": 0,
                 "total_instalacoes": 0,
@@ -971,3 +975,124 @@ async def desativar_subestacao_ddd(
     except Exception as e:
         logger.error(f"Erro ao desativar subestação: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Erro ao desativar subestação: {str(e)}")
+
+
+@router_ddd.get("/{subestacao_id}/paineis-por-transformador", response_model=Dict[str, Any])
+async def obter_paineis_por_transformador(
+    subestacao_id: int,
+    engine = Depends(get_engine)
+) -> Dict[str, Any]:
+    """Retorna painéis solares agrupados por transformador de uma subestação"""
+    try:
+        from sqlalchemy import text
+        
+        query = text("""
+            SELECT 
+                t.id as transformador_id,
+                t.codigo as transformador_codigo,
+                t.latitude,
+                t.longitude,
+                COUNT(p.id) as total_paineis,
+                COALESCE(SUM(p.area_m2), 0) as area_total_m2,
+                COALESCE(SUM(p.potencia_w)/1000.0, 0) as potencia_total_kw,
+                COALESCE(AVG(p.confianca), 0) as confianca_media,
+                COUNT(DISTINCT telhados.id) as total_telhados
+            FROM transformadores_aneel t
+            LEFT JOIN telhados_detectados_transformador telhados ON telhados.transformador_id = t.id
+            LEFT JOIN paineis_solares_detectados p ON p.transformador_id = t.id
+            WHERE t.subestacao_id = :subestacao_id
+            GROUP BY t.id, t.codigo, t.latitude, t.longitude
+            HAVING COUNT(p.id) > 0
+            ORDER BY COUNT(p.id) DESC
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(query, {"subestacao_id": subestacao_id})
+            rows = result.fetchall()
+        
+        transformadores = []
+        for row in rows:
+            transformadores.append({
+                "transformador_id": row[0],
+                "transformador_codigo": row[1],
+                "latitude": float(row[2]) if row[2] else None,
+                "longitude": float(row[3]) if row[3] else None,
+                "total_paineis": row[4],
+                "area_total_m2": float(row[5]),
+                "potencia_total_kw": float(row[6]),
+                "confianca_media": float(row[7]),
+                "total_telhados": row[8]
+            })
+        
+        return {
+            "status": "sucesso",
+            "codigo": 200,
+            "data": {
+                "subestacao_id": subestacao_id,
+                "total_transformadores": len(transformadores),
+                "transformadores": transformadores
+            }
+        }
+    
+    except Exception as e:
+        logger.error(f"Erro ao buscar painéis por transformador: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar painéis: {str(e)}")
+
+
+@router_transformadores.get("/{transformador_id}/paineis-detalhes", response_model=Dict[str, Any])
+async def obter_paineis_detalhes_transformador(
+    transformador_id: int,
+    limite: int = 5,
+    engine = Depends(get_engine)
+) -> Dict[str, Any]:
+    """Retorna detalhes dos painéis de um transformador específico"""
+    try:
+        from sqlalchemy import text
+        
+        query = text("""
+            SELECT 
+                p.id,
+                p.telhado_id,
+                p.area_m2,
+                p.potencia_w,
+                p.confianca,
+                t.latitude as telhado_lat,
+                t.longitude as telhado_lon,
+                t.url_imagem_origem
+            FROM paineis_solares_detectados p
+            JOIN telhados_detectados_transformador t ON p.telhado_id = t.id
+            WHERE p.transformador_id = :transformador_id
+            ORDER BY p.confianca DESC
+            LIMIT :limite
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(query, {"transformador_id": transformador_id, "limite": limite})
+            rows = result.fetchall()
+        
+        paineis = []
+        for row in rows:
+            paineis.append({
+                "id": row[0],
+                "telhado_id": row[1],
+                "area_m2": float(row[2]),
+                "potencia_w": float(row[3]),
+                "confianca": float(row[4]),
+                "telhado_lat": float(row[5]) if row[5] else None,
+                "telhado_lon": float(row[6]) if row[6] else None,
+                "url_imagem": row[7]
+            })
+        
+        return {
+            "status": "sucesso",
+            "codigo": 200,
+            "data": {
+                "transformador_id": transformador_id,
+                "total_paineis": len(paineis),
+                "paineis": paineis
+            }
+        }
+    
+    except Exception as e:
+        logger.error(f"Erro ao buscar detalhes dos painéis: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar detalhes: {str(e)}")

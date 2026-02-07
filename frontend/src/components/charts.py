@@ -152,9 +152,9 @@ def render_carga_section(
 ) -> None:
     """
     Renderiza gráfico comparativo de cargas mostrando a separação entre:
-    - Carga Líquida (ONS): O que o sistema de transmissão "vê"
+    - Carga Proporcional: Calculada com base em dados ANEEL (transformadores)
     - Geração MMGD: Produção solar/eólica distribuída
-    - Consumo Real: Demanda total = Carga Líquida + MMGD
+    - Consumo Real: Demanda total = Carga Proporcional + MMGD
 
     Args:
         df_carga: DataFrame com dados de carga (colunas: hora, carga_ons, estimativa_solar_mw, carga_real_estimada)
@@ -204,9 +204,9 @@ def render_carga_section(
     hora_pico = "12h"
 
     col1.metric(
-        "⚡ Carga Líquida (ONS)",
+        "⚡ Carga Proporcional",
         format_mw(carga_liquida_atual, decimals=0),
-        help="Carga medida pelo ONS nos pontos de entrega (transmissão)"
+        help="Carga calculada proporcionalmente baseada em transformadores ANEEL"
     )
     
     # Buscar dados reais de painéis detectados
@@ -272,11 +272,11 @@ def render_carga_section(
         st.markdown("""
         ### Conceitos Fundamentais
 
-        #### 🔵 Carga Líquida (ONS)
-        - **O que é**: Medida nos pontos de entrega do sistema de transmissão
-        - **O que inclui**: Energia fornecida pela rede (usinas + transmissão)
-        - **O que NÃO inclui**: Geração distribuída (MMGD) consumida localmente
-        - **Quem mede**: Operador Nacional do Sistema (ONS)
+        #### 🔵 Carga Proporcional
+        - **O que é**: Carga calculada proporcionalmente baseada em dados ANEEL
+        - **Fonte**: Dados de transformadores e consumo granular ANEEL (atualização anual)
+        - **Método**: Distribuição proporcional baseada em número de transformadores
+        - **O que NÃO é**: Não é medição direta do ONS
 
         #### 🟡 Geração MMGD (Micro e Minigeração Distribuída)
         - **O que é**: Painéis solares e pequenas usinas no ponto de consumo
@@ -286,7 +286,7 @@ def render_carga_section(
 
         #### 🟢 Consumo Real (Estimado)
         - **O que é**: Demanda TOTAL de energia pelos consumidores
-        - **Fórmula**: Consumo Real = Carga Líquida ONS + Geração MMGD
+        - **Fórmula**: Consumo Real = Carga Proporcional + Geração MMGD
         - **Inclui**: Energia da rede + energia da MMGD local
         - **Relevância**: Representa a demanda real que precisa ser atendida
 
@@ -300,24 +300,24 @@ def render_carga_section(
         **Exemplo prático às 12h (pico solar):**
         - Consumo Real: **100 MW** (o que os consumidores realmente usam)
         - Geração MMGD: **30 MW** (painéis solares gerando)
-        - Carga Líquida ONS: **70 MW** (100 - 30 = o que vem da rede)
+        - Carga Proporcional: **70 MW** (100 - 30 = estimativa baseada em ANEEL)
 
-        O ONS só "vê" 70 MW, mas o consumo real é 100 MW.
+        O cálculo proporcional estima 70 MW, mas o consumo real é 100 MW.
         """)
 
-    # ===== GRÁFICO 1: CARGA LÍQUIDA VS CONSUMO REAL (LINHAS SIMPLES) =====
+    # ===== GRÁFICO 1: CARGA PROPORCIONAL VS CONSUMO REAL (LINHAS SIMPLES) =====
     fig1 = go.Figure()
 
-    # Trace 1: Carga Líquida ONS
+    # Trace 1: Carga Proporcional
     fig1.add_trace(
         go.Scatter(
             x=df_carga["hora"],
             y=df_carga["carga_ons"],
             mode="lines",
-            name="Carga Líquida (ONS)",
+            name="Carga Proporcional",
             line={"color": "#1e3a8a", "width": 3},
             hovertemplate=(
-                "<b>Carga Líquida (ONS)</b><br>"
+                "<b>Carga Proporcional</b><br>"
                 "Hora: %{x}<br>"
                 "Carga: %{y:.0f} MW<br>"
                 "<extra></extra>"
@@ -361,7 +361,7 @@ def render_carga_section(
         )
 
     fig1.update_layout(
-        title={"text": "Comparativo: Carga Líquida vs Consumo Real", "x": 0.5, "xanchor": "center"},
+        title={"text": "Comparativo: Carga Proporcional vs Consumo Real", "x": 0.5, "xanchor": "center"},
         xaxis_title="Data/Hora",
         yaxis_title="Potência Média (MW)",
         template="plotly_dark",

@@ -7,9 +7,10 @@ from .api.health import router as health_router
 from .api.realtime_estimation import router as realtime_estimation_router
 from .api.load_calculation import router as load_calculation_router
 from .api.satelite import router as satelite_router
-from .api.subestacoes import router as subestacoes_router, router_ddd as subestacoes_router_ddd
+from .api.subestacoes import router as subestacoes_router, router_ddd as subestacoes_router_ddd, router_transformadores as subestacoes_transformadores_router
 from .api.transformadores import router as transformadores_router
 from .api.telhados import router as telhados_router
+from .api.paineis_solares import router as paineis_solares_router
 from .core import (
     AppException,
     app_exception_handler,
@@ -52,6 +53,8 @@ app.include_router(realtime_estimation_router)  # DDD API for RealTimeEstimation
 app.include_router(load_calculation_router)  # DDD API for LoadCalculation
 app.include_router(subestacoes_router)
 app.include_router(subestacoes_router_ddd)  # DDD API for Subestacao
+app.include_router(subestacoes_transformadores_router)  # Transformadores endpoints
 app.include_router(transformadores_router)  # DDD API
 app.include_router(telhados_router)  # DDD API
+app.include_router(paineis_solares_router)  # Painéis Solares API
 app.include_router(satelite_router)

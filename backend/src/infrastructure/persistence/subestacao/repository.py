@@ -261,3 +261,166 @@ class SQLAlchemySubestacaoRepository(ISubestacaoRepository):
             }
         except Exception as e:
             raise SubestacaoNotFoundError(f"Erro ao obter estatísticas: {str(e)}")
+    
+    def obter_mix_consumidores(self, subestacao_id: int) -> Dict[str, Any]:
+        """Obtém mix de consumidores por subestação - dados reais ANEEL"""
+        try:
+            conn = get_db_connection()
+            
+            # Primeiro, buscar o código da subestação pelo ID
+            result = conn.execute(text("""
+                SELECT codigo FROM subestacoes_aneel WHERE id = :subestacao_id
+            """), {"subestacao_id": subestacao_id})
+            row = result.fetchone()
+            if not row:
+                return {
+                    'subestacao_id': subestacao_id,
+                    'total_ucs': 0,
+                    'total_instalacoes': 0,
+                    'potencia_total_mw': 0.0,
+                    'mix_por_classe': {}
+                }
+            
+            subestacao_codigo = row[0]
+            
+            # Buscar consumidores de AT
+            result_at = conn.execute(text("""
+                SELECT 
+                    classe_subclasse_codigo,
+                    COUNT(*) as qtd_ucs,
+                    SUM(COALESCE(carga_instalada_kw, 0)) as potencia_kw
+                FROM consumidores_at_aneel
+                WHERE subestacao_codigo = :subestacao_codigo
+                GROUP BY classe_subclasse_codigo
+            """), {"subestacao_codigo": subestacao_codigo})
+            
+            # Buscar consumidores de MT
+            result_mt = conn.execute(text("""
+                SELECT 
+                    classe_subclasse_codigo,
+                    COUNT(*) as qtd_ucs,
+                    SUM(COALESCE(carga_instalada_kw, 0)) as potencia_kw
+                FROM consumidores_mt_aneel
+                WHERE subestacao_codigo = :subestacao_codigo
+                GROUP BY classe_subclasse_codigo
+            """), {"subestacao_codigo": subestacao_codigo})
+            
+            # Buscar consumidores de BT
+            result_bt = conn.execute(text("""
+                SELECT 
+                    classe_subclasse_codigo,
+                    COUNT(*) as qtd_ucs,
+                    SUM(COALESCE(carga_instalada_kw, 0)) as potencia_kw
+                FROM consumidores_bt_aneel
+                WHERE subestacao_codigo = :subestacao_codigo
+                GROUP BY classe_subclasse_codigo
+            """), {"subestacao_codigo": subestacao_codigo})
+            
+            # Consolidar dados
+            mix_por_classe = {}
+            total_ucs = 0
+            total_instalacoes = 0
+            potencia_total_kw = 0.0
+            
+            # Mapear códigos de classe e subclasse para nomes amigáveis
+            classe_map = {
+                'R': 'Residencial',
+                'I': 'Industrial',
+                'C': 'Comercial',
+                'RU': 'Rural',
+                'PP': 'Poder Público',
+                'IP': 'Iluminação Pública',
+                'SP': 'Serviço Público',
+                'CP': 'Consumo Próprio',
+                '1': 'Residencial',
+                '2': 'Industrial',
+                '3': 'Comercial',
+                '4': 'Rural',
+                '5': 'Poder Público',
+                '6': 'Iluminação Pública',
+                '7': 'Serviço Público',
+                '8': 'Consumo Próprio'
+            }
+            
+            # Mapear subclasses para tipos de estabelecimento
+            tipo_map = {
+                'R1': 'Residencial Baixa Renda',
+                'R2': 'Residencial',
+                'R3': 'Residencial Alta Renda',
+                'I1': 'Industrial',
+                'I2': 'Industrial Grande Porte',
+                'C1': 'Comercial',
+                'C2': 'Comercial Serviços',
+                'C3': 'Comercial Outros',
+                'C9': 'Comercial Diversos',
+                'CO1': 'Comercial',
+                'CO2': 'Comercial Serviços',
+                'CO3': 'Comercial Outros',
+                'CO9': 'Comercial Diversos',
+                'RU1': 'Rural Agropecuária',
+                'RU2': 'Rural Cooperativa',
+                'RU3': 'Rural Irrigação',
+                'PP1': 'Poder Público',
+                'PP2': 'Serviço Público',
+                'IP': 'Iluminação Pública',
+            }
+            
+            for result in [result_at, result_mt, result_bt]:
+                for row in result:
+                    classe_codigo = row[0] if row[0] else ''
+                    qtd_ucs = int(row[1])
+                    potencia_kw = float(row[2]) if row[2] else 0.0
+                    
+                    # Extrair prefixo da classe (primeiras letras ou primeiro dígito)
+                    if classe_codigo:
+                        # Tentar extrair letras primeiro (ex: CO, PP, RU)
+                        prefixo = ''.join([c for c in classe_codigo if c.isalpha()])
+                        if not prefixo:
+                            # Se não houver letras, usar primeiro dígito
+                            prefixo = classe_codigo[0]
+                    else:
+                        prefixo = '0'
+                    
+                    classe_nome = classe_map.get(prefixo, 'Outros')
+                    tipo_estabelecimento = tipo_map.get(classe_codigo, classe_codigo or 'Não especificado')
+                    
+                    # Inicializar classe se não existir
+                    if classe_nome not in mix_por_classe:
+                        mix_por_classe[classe_nome] = {
+                            'qtd_unidades_consumidoras': 0,
+                            'qtd_instalacoes': 0,
+                            'potencia_total_mw': 0.0,
+                            'por_tipo': {}
+                        }
+                    
+                    # Inicializar tipo se não existir
+                    if tipo_estabelecimento not in mix_por_classe[classe_nome]['por_tipo']:
+                        mix_por_classe[classe_nome]['por_tipo'][tipo_estabelecimento] = {
+                            'qtd_unidades_consumidoras': 0,
+                            'qtd_instalacoes': 0,
+                            'potencia_total_mw': 0.0
+                        }
+                    
+                    # Atualizar totais da classe
+                    mix_por_classe[classe_nome]['qtd_unidades_consumidoras'] += qtd_ucs
+                    mix_por_classe[classe_nome]['qtd_instalacoes'] += qtd_ucs
+                    mix_por_classe[classe_nome]['potencia_total_mw'] += potencia_kw / 1000.0
+                    
+                    # Atualizar totais do tipo
+                    mix_por_classe[classe_nome]['por_tipo'][tipo_estabelecimento]['qtd_unidades_consumidoras'] += qtd_ucs
+                    mix_por_classe[classe_nome]['por_tipo'][tipo_estabelecimento]['qtd_instalacoes'] += qtd_ucs
+                    mix_por_classe[classe_nome]['por_tipo'][tipo_estabelecimento]['potencia_total_mw'] += potencia_kw / 1000.0
+                    
+                    total_ucs += qtd_ucs
+                    total_instalacoes += qtd_ucs
+                    potencia_total_kw += potencia_kw
+            
+            return {
+                'subestacao_id': subestacao_id,
+                'total_ucs': total_ucs,
+                'total_instalacoes': total_instalacoes,
+                'potencia_total_mw': potencia_total_kw / 1000.0,
+                'mix_por_classe': mix_por_classe
+            }
+        except Exception as e:
+            raise SubestacaoNotFoundError(f"Erro ao obter mix de consumidores: {str(e)}")

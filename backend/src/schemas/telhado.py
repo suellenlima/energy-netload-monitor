@@ -158,3 +158,59 @@ class DetalhesSubestacao(BaseModel):
                 "telhados": []
             }
         }
+
+
+class DeteccaoTelhadoRequest(BaseModel):
+    """Request para detecção de telhados usando Google Maps em grid"""
+    
+    transformador_id: int = Field(..., description="ID do transformador")
+    confianca_minima: float = Field(default=0.5, ge=0, le=1, description="Confiança mínima para detecção (0-1)")
+    grid_size: int = Field(default=3, ge=1, le=5, description="Tamanho do grid (NxN, ex: 3 = grid 3x3)")
+    zoom: int = Field(default=20, ge=18, le=21, description="Zoom do Google Maps (18-21, máximo=20)")
+    raio_metros: float = Field(default=300, ge=50, le=1000, description="Raio de cobertura em metros")
+    salvar_debug: bool = Field(default=False, description="Salvar imagens debug")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "transformador_id": 100,
+                "confianca_minima": 0.6,
+                "grid_size": 3,
+                "zoom": 20,
+                "raio_metros": 300,
+                "salvar_debug": False
+            }
+        }
+
+
+class DeteccaoTelhadoResponse(BaseModel):
+    """Response da detecção de telhados"""
+    
+    sucesso: bool
+    transformador_id: int
+    telhados_detectados: int
+    imagens_processadas: int
+    tempo_processamento_s: float
+    telhados_salvos: List[int]
+    erros: List[str] = Field(default_factory=list)
+    avisos: List[str] = Field(default_factory=list)
+    detalhes: Dict[str, Any] = Field(default_factory=dict)
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sucesso": True,
+                "transformador_id": 100,
+                "telhados_detectados": 15,
+                "imagens_processadas": 9,
+                "tempo_processamento_s": 45.5,
+                "telhados_salvos": [1, 2, 3],
+                "erros": [],
+                "avisos": ["Algumas imagens com baixa qualidade"],
+                "detalhes": {
+                    "grid_size": 3,
+                    "zoom": 20,
+                    "area_coberta_m2": 90000
+                }
+            }
+        }

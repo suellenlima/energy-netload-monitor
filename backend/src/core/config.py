@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     db_pool_recycle: int = 3600
 
     # API
-    api_title: str = "Energy Netload Monitor API"
+    api_title: str = "EFFICIENERGY API"
     api_version: str = "1.0.0"
     cors_origins: list[str] = ["*"]
 
@@ -26,6 +26,9 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = "INFO"
+    
+    # Google Maps
+    google_maps_api_key: str = ""
 
     class Config:
         env_file = ".env"
