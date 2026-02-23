@@ -54,6 +54,10 @@ build/
 *.sqlite3
 *.db
 
+# SQL backup files
+backup_*.sql
+*.sql.backup
+
 # Env files
 .env
 .env.*
