@@ -271,8 +271,8 @@ def render_executive_kpis(
             except Exception as e:
                 logger.debug(f"Não foi possível carregar carga ANEEL: {e}")
 
-            # Renderizar KPIs em 5 colunas
-            col1, col2, col3, col4, col5 = st.columns(5)
+            # Renderizar KPIs em 4 colunas
+            col1, col2, col3, col4 = st.columns(4)
 
             with col1:
                 # Usar MMGD como delta
@@ -287,28 +287,20 @@ def render_executive_kpis(
 
             with col2:
                 st.metric(
-                    label="Carga Total",
-                    value=f"~{consumo_estimado:,.1f} MW",
-                    delta=f"+{geracao_mmgd:,.1f} MW MMGD",
-                    help="Soma da carga granular + carga líquida (demanda total da distribuidora)"
-                )
-
-            with col3:
-                st.metric(
                     label="🏭 Geração MMGD (Agora)",
                     value=f"{geracao_mmgd:,.1f} MW",
                     delta=f"+{geracao_mmgd:,.1f} MW geração",
                     help="Geração distribuída estimada (painéis solares, mini-usinas)"
                 )
 
-            with col4:
+            with col3:
                 st.metric(
                     label="Penetração Solar",
                     value=f"{status_icon} {status}",
                     delta=f"{irradiancia:.0f} W/m² irradiância",
                     help="Avaliação baseada na contribuição da MMGD"
                 )
-            with col5:
+            with col4:
                 # Potência total ANEEL - não comparar com carga (são grandezas diferentes)
                 # Calcular utilização: carga_atual / potencia_total * 100
                 utilizacao = (carga_ons / carga_aneel * 100) if carga_aneel > 0 else 0
