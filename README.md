@@ -26,6 +26,9 @@ Para guia completo de instalação e uso, consulte **[docs/QUICKSTART.md](docs/Q
 - Docker Desktop com Docker Compose v2
 - Python 3.8+ (para desenvolvimento local)
 
+### OBS
+- labelImg foi utilizado para marcar paineis e telhados em datasets
+
 ## Subindo o ambiente
 ```powershell
 docker-compose up --build
