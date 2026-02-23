@@ -95,20 +95,6 @@ def load_carga_data(client: ApiClient, subsistema: str, distribuidora: str) -> p
             import logging
             logging.warning(f"Aviso: Não foi possível buscar carga distribuidora horária: {e}")
         
-        # Buscar dados de curva de pato
-        try:
-            params_pato = {"distribuidora": distribuidora, "dias": 30} if distribuidora else {"dias": 30}
-            result_pato = client.get("/analise/curva-pato", params=params_pato)
-            if not result_pato.error and result_pato.data:
-                df_pato = pd.DataFrame(result_pato.data)
-                if not df_pato.empty:
-                    # Armazenar dados de curva de pato como atributo do DataFrame
-                    df.attrs["curva_pato"] = df_pato
-        except Exception as e:
-            # Se falhar ao buscar curva de pato, continuar sem ela
-            import logging
-            logging.warning(f"Aviso: Não foi possível buscar curva de pato: {e}")
-        
         # Buscar dados de carga ONS em tempo real
         try:
             result_ons = client.get("/analise/carga-ons-realtime", params={"limite": 288})
@@ -458,88 +444,6 @@ def render_carga_section(
             
             apply_plotly_locale(fig2)
             st.plotly_chart(fig2, use_container_width=True)
-
-
-    # ===== GRÁFICO 3: CURVA DE PATO =====
-    if "curva_pato" in df_carga.attrs:
-        df_pato = df_carga.attrs["curva_pato"]
-        if not df_pato.empty:
-            fig3 = go.Figure()
-            
-            # Converter hora para número para plotagem
-            df_pato['hora_num'] = df_pato['hora'].str[:2].astype(int)
-            
-            # Área entre min e max (envelope)
-            fig3.add_trace(
-                go.Scatter(
-                    x=df_pato['hora_num'],
-                    y=df_pato['carga_maxima_mw'],
-                    mode='lines',
-                    name='Máxima',
-                    line=dict(color='rgba(239, 68, 68, 0)'),
-                    showlegend=False
-                )
-            )
-            
-            fig3.add_trace(
-                go.Scatter(
-                    x=df_pato['hora_num'],
-                    y=df_pato['carga_minima_mw'],
-                    mode='lines',
-                    name='Mínima',
-                    line=dict(color='rgba(239, 68, 68, 0)'),
-                    fillcolor='rgba(239, 68, 68, 0.2)',
-                    fill='tonexty',
-                    showlegend=False
-                )
-            )
-            
-            # Linha de carga média (principal)
-            fig3.add_trace(
-                go.Scatter(
-                    x=df_pato['hora_num'],
-                    y=df_pato['carga_media_mw'],
-                    mode='lines+markers',
-                    name='Carga Média',
-                    line=dict(color='#3b82f6', width=3),
-                    marker=dict(size=6),
-                    fill='tozeroy',
-                    fillcolor='rgba(59, 130, 246, 0.2)',
-                    hovertemplate=(
-                        "<b>Hora</b>: %{x:02d}:00<br>"
-                        "<b>Carga Média</b>: %{y:.2f} MW<br>"
-                        "<extra></extra>"
-                    )
-                )
-            )
-            
-            fig3.update_layout(
-                title={"text": "Curva de Pato - Padrão de Carga por Hora do Dia", "x": 0.5, "xanchor": "center"},
-                xaxis_title="Hora do Dia",
-                yaxis_title="Carga (MW)",
-                template="plotly_dark",
-                hovermode="x unified",
-                height=400,
-                xaxis=dict(
-                    tickmode='linear',
-                    tick0=0,
-                    dtick=1,
-                    tickformat='02d'
-                ),
-                yaxis={"ticksuffix": " MW", "rangemode": "tozero"},
-                annotations=[
-                    dict(
-                        text="Agrupa dados dos últimos 30 dias para mostrar padrão típico de demanda",
-                        xref="paper", yref="paper",
-                        x=0.5, y=-0.15,
-                        showarrow=False,
-                        font=dict(size=10, color="gray")
-                    )
-                ]
-            )
-            
-            apply_plotly_locale(fig3)
-            st.plotly_chart(fig3, use_container_width=True)
 
 
 def render_classes_consumo(client: ApiClient, distribuidora: str) -> None:
